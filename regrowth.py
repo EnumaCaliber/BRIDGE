@@ -188,7 +188,6 @@ class SSIMLayerSelector:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class SaliencyComputer:
-    """Saliency(θ) = (∂L/∂θ)² · θ²"""
 
     def __init__(self, model, criterion, device='cuda'):
         self.model = model
@@ -741,7 +740,7 @@ def main():
                         help='Directory containing baseline .pth files (e.g., ./resnet20/iterative/)')
 
     # 初始模型路径
-    parser.add_argument('--initial_ckpt', type=str, default=None,
+    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/iterative/iterative_0.9903.pth",
                         help='Initial checkpoint path (if None, use baseline_dir/first file)')
 
     # Sparsity
@@ -816,17 +815,7 @@ def main():
         test_loader=test_loader
     )
     baseline_interp = BaselineInterpolator(baseline_dict)
-
-    # 确定初始checkpoint路径
-    if args.initial_ckpt is None:
-        baseline_path = Path(args.baseline_dir)
-        pth_files = sorted(baseline_path.glob("*.pth"))
-        if pth_files:
-            initial_ckpt = str(pth_files[0])
-        else:
-            raise ValueError(f"No .pth files found in {args.baseline_dir}")
-    else:
-        initial_ckpt = args.initial_ckpt
+    initial_ckpt = args.initial_ckpt
 
     print(f"Initial checkpoint: {initial_ckpt}")
 
