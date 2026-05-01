@@ -103,9 +103,6 @@ def load_baseline_from_folder(model_name, model_dir, device, test_loader):
 
 
 class BaselineInterpolator:
-    """
-    Linear interpolation over discrete (sparsity, accuracy) baseline points.
-    """
 
     def __init__(self, table: dict):
         self.points = {float(k): float(v) for k, v in table.items()}
@@ -136,10 +133,6 @@ class BaselineInterpolator:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class SSIMLayerSelector:
-    """
-    Per-iteration SSIM-based search-space selection.
-    """
-
     @staticmethod
     def update_search_space(sparse_model, pretrained_model,
                             data_loader_ref,
@@ -641,6 +634,7 @@ class RegrowthPolicyGradient:
 
         if reward > self._best_reward_seen:
             self._best_reward_seen = reward
+            # TODO
             self._best_model_state = copy.deepcopy(model_copy.state_dict())
             self._save_best_model(epoch, reward, accuracy, model_copy,
                                   allocation, sel_frac)
@@ -663,6 +657,7 @@ class RegrowthPolicyGradient:
                          f'{self.model_name}/{self.method}/{self.model_sparsity}')
         os.makedirs(d, exist_ok=True)
         p = os.path.join(d, f'best_ep{epoch + 1}_rwd{reward * 100:+.2f}pp.pth')
+        # TODO
         torch.save({
             'epoch': epoch, 'reward': reward, 'accuracy': accuracy,
             'model_state_dict': model.state_dict(),
@@ -679,6 +674,7 @@ class RegrowthPolicyGradient:
         d = os.path.join(self.checkpoint_dir,
                          f'{self.model_name}/{self.method}/{self.model_sparsity}')
         os.makedirs(d, exist_ok=True)
+        # TODO
         torch.save({
             'epoch': epoch, 'best_reward': reward,
             'best_allocation': alloc, 'best_regrow_indices': regrow,
@@ -805,9 +801,7 @@ def main():
         dataset=args.dataset,
     )
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # 从文件夹扫描构建Baseline表（不再硬编码）
-    # ═════════════════════════════════════════════════════════════════════════
+    # TODO
     baseline_dict = load_baseline_from_folder(
         model_name=args.m_name,
         model_dir=args.baseline_dir,
