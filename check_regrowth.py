@@ -1,8 +1,3 @@
-"""
-test_taylor_regrowth.py (fixed v3)
-L1 重建 + 正确的 BN 权重转移。
-"""
-
 import torch
 import torch.nn as nn
 import copy
@@ -53,13 +48,13 @@ total_prun = sum(pruned_channels.values())
 sp_before  = 1 - total_prun / total_orig
 print(f"Sparsity before: {sp_before:.4f}")
 
-# ── Step 1: new_config ────────────────────────────────────────────────────────
+
 new_config = dict(pruned_channels)
 for lname in target_layers:
     cap = original_channels[lname] - pruned_channels[lname]
     new_config[lname] = pruned_channels[lname] + max(1, int(cap * args.regrow_ratio))
 
-# ── Step 2: L1 重建 ───────────────────────────────────────────────────────────
+
 print("Rebuilding with L1 importance…")
 new_model = copy.deepcopy(dense_model)
 pruning_ratio_dict = {}
@@ -77,7 +72,7 @@ pruner = tp.pruner.MagnitudePruner(
 )
 pruner.step()
 
-# ── Step 3: 验证 pruned/new 通道数是否对齐（L1 保证前 n 个通道相同）─────────
+
 print("\nVerifying channel alignment between pruned and new model…")
 p_mods = dict(pruned_model.named_modules())
 n_mods = dict(new_model.named_modules())
@@ -97,11 +92,11 @@ for name in target_layers:
         all_ok = False
 
 if all_ok:
-    print("  ✓ All pruned channels align with new model's first N channels")
+    print("All pruned channels align with new model's first N channels")
 else:
-    print("  ✗ Channel mismatch — L1 ordering differs from original pruning")
+    print("Channel mismatch — L1 ordering differs from original pruning")
 
-# ── Step 4: 权重转移 ──────────────────────────────────────────────────────────
+
 print("\nTransferring weights…")
 with torch.no_grad():
     for name, new_m in new_model.named_modules():
@@ -132,7 +127,7 @@ with torch.no_grad():
 
 new_model = new_model.to(DEVICE)
 
-# ── Step 5: 验证 ──────────────────────────────────────────────────────────────
+
 actual_channels = {n: m.out_channels for n, m in new_model.named_modules()
                    if isinstance(m, nn.Conv2d)}
 total_new = sum(actual_channels.values())
@@ -172,7 +167,7 @@ if sp_after < sp_before:
 else:
     print("\n✗ 通道未涨回")
 
-# ── Mini finetune ─────────────────────────────────────────────────────────────
+
 print("\n" + "=" * 60)
 print("Mini Finetune (10 epochs)…")
 print("=" * 60)
@@ -203,7 +198,6 @@ print(f"After mini finetune      : {best_acc:.2f}%  (Δ={best_acc - acc_before:+
 print(f"Sparsity before          : {sp_before:.4f}")
 print(f"Sparsity after regrowth  : {sp_after:.4f}  (Δ={sp_after - sp_before:+.4f})")
 
-# finetune 不改变结构，稀疏度不变
 new_channels_ft = {n: m.out_channels for n, m in new_model.named_modules()
                    if isinstance(m, nn.Conv2d)}
 sp_after_ft = 1 - sum(new_channels_ft.values()) / total_orig
