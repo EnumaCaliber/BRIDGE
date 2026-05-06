@@ -36,30 +36,20 @@ def set_seed(seed=42):
 def load_baseline_from_folder(model_name, model_dir, device, test_loader):
     model_path = Path(model_dir)
     pth_files = sorted(model_path.glob("*.pth"))
-
     if not pth_files:
         raise ValueError(f"No .pth files found in {model_dir}")
 
-
     print("=" * 60)
-
     baseline_dict = {}
-
     for pth_file in pth_files:
-
         filename = pth_file.name
         match = re.search(r'(\d+\.\d+)', filename)
-        if match:
-            sparsity = float(match.group(1))
-        else:
+        if not match:
             print(f"  警告: 无法从文件名提取稀疏度: {filename}")
             continue
-
-
+        sparsity = float(match.group(1))
         try:
             sd = torch.load(pth_file, map_location=device)
-
-
             merged = {}
             for k, v in sd.items():
                 if k.endswith('_orig'):
@@ -67,43 +57,31 @@ def load_baseline_from_folder(model_name, model_dir, device, test_loader):
                     merged[base] = v * sd[base + '_mask']
                 elif not k.endswith('_mask'):
                     merged[k] = v
-
             model = model_loader(model_name, device)
             model.load_state_dict(merged)
             model.eval()
-
-
             correct, total = 0, 0
             with torch.no_grad():
                 for inputs, targets in test_loader:
                     inputs, targets = inputs.to(device), targets.to(device)
-                    outputs = model(inputs)
-                    _, predicted = outputs.max(1)
+                    _, predicted = model(inputs).max(1)
                     total += targets.size(0)
                     correct += predicted.eq(targets).sum().item()
-
             accuracy = 100.0 * correct / total
             baseline_dict[sparsity] = accuracy
-
             print(f"  {filename}: sparsity={sparsity:.4f}, accuracy={accuracy:.2f}%")
-
         except Exception as e:
             print(f"  错误处理 {filename}: {e}")
-            continue
 
-    # 按稀疏度排序
     baseline_dict = dict(sorted(baseline_dict.items()))
-
     print(f"\nBaseline表构建完成: {len(baseline_dict)} 个点")
     print(f"  稀疏度范围: {min(baseline_dict.keys()):.4f} ~ {max(baseline_dict.keys()):.4f}")
     print(f"  准确率范围: {min(baseline_dict.values()):.2f}% ~ {max(baseline_dict.values()):.2f}%")
     print("=" * 60 + "\n")
-
     return baseline_dict
 
 
 class BaselineInterpolator:
-
     def __init__(self, table: dict):
         self.points = {float(k): float(v) for k, v in table.items()}
         pts = sorted(self.points.items())
@@ -112,10 +90,8 @@ class BaselineInterpolator:
 
     def get_baseline_acc(self, sparsity: float) -> float:
         pts = sorted(self.points.items())
-        if sparsity <= pts[0][0]:
-            return pts[0][1]
-        if sparsity >= pts[-1][0]:
-            return pts[-1][1]
+        if sparsity <= pts[0][0]: return pts[0][1]
+        if sparsity >= pts[-1][0]: return pts[-1][1]
         for i in range(len(pts) - 1):
             s1, a1 = pts[i]
             s2, a2 = pts[i + 1]
@@ -135,12 +111,7 @@ class BaselineInterpolator:
 class SSIMLayerSelector:
     @staticmethod
     def update_search_space(sparse_model, pretrained_model,
-                            data_loader_ref,
-                            threshold: float = -1.0,
-                            num_batches: int = 64) -> tuple:
-        """
-        Returns (selected_layers, ssim_dict).
-        """
+                            data_loader_ref, threshold=0.0, num_batches=64):
         all_masked = [name for name, m in sparse_model.named_modules()
                       if hasattr(m, 'weight_mask') and len(name) > 0]
 
@@ -152,8 +123,7 @@ class SSIMLayerSelector:
             feats_pre = ext_pre.extract_block_features(data_loader_ref, num_batches=num_batches)
             feats_spar = ext_spar.extract_block_features(data_loader_ref, num_batches=num_batches)
 
-        ssim_raw = compute_block_ssim(feats_pre, feats_spar)
-        block_ssim = ssim_raw.get('all_layers', {})
+        block_ssim = compute_block_ssim(feats_pre, feats_spar).get('all_layers', {})
 
         ssim_dict, selected = {}, []
         for lname in all_masked:
@@ -181,7 +151,6 @@ class SSIMLayerSelector:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class SaliencyComputer:
-
     def __init__(self, model, criterion, device='cuda'):
         self.model = model
         self.criterion = criterion
@@ -202,8 +171,7 @@ class SaliencyComputer:
         for lname in target_layers:
             m = module_dict.get(lname)
             if m is not None and hasattr(m, 'weight'):
-                self.accumulated_grads[lname] = torch.zeros(
-                    m.weight.shape, device=self.device)
+                self.accumulated_grads[lname] = torch.zeros(m.weight.shape, device=self.device)
 
         for inputs, labels in tqdm(data_loader, desc="  grad accum"):
             inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -219,7 +187,7 @@ class SaliencyComputer:
                         for lname in target_layers:
                             if name == f"{lname}.weight":
                                 self.accumulated_grads[lname] += (
-                                        grad.pow(2).detach() * param.data.pow(2).detach())
+                                    grad.pow(2).detach() * param.data.pow(2).detach())
                                 break
                         break
             self.grad_count += 1
@@ -239,17 +207,11 @@ class SaliencyComputer:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class RegrowthAgent(nn.Module):
-    """
-    LSTM controller with two separate decoders.
-    """
-
     def __init__(self, budget_space_size, alloc_space_size,
                  hidden_size, context_dim, device='cuda'):
         super().__init__()
         self.DEVICE = device
         self.nhid = hidden_size
-        self.budget_space = budget_space_size
-        self.alloc_space = alloc_space_size
         self.input_dim = max(budget_space_size, alloc_space_size)
 
         self.lstm = nn.LSTMCell(self.input_dim + context_dim, hidden_size)
@@ -349,6 +311,7 @@ class RegrowthPolicyGradient:
         self.layer_capacities = config['layer_capacities']
         self.total_capacity = max(sum(self.layer_capacities), 1)
         self.init_strategy = config.get('init_strategy', 'zero')
+        self.budget_bonus = config.get('budget_bonus', 0.02)  # weight for budget utilization term
 
         self.early_stop_patience = config.get('early_stop_patience', 40)
         self.min_epochs = config.get('min_epochs', 50)
@@ -375,8 +338,8 @@ class RegrowthPolicyGradient:
         min_f = config.get('min_budget_frac', 0.001)
         max_f = config.get('max_budget_frac', 0.010)
         self.budget_fracs = np.linspace(min_f, max_f, self.BUDGET_SPACE).tolist()
-        print(f"  Budget fracs: [{min_f:.4f}…{max_f:.4f}]  "
-              f"({self.BUDGET_SPACE} options)")
+        print(f"  Budget fracs: [{min_f:.4f}…{max_f:.4f}]  ({self.BUDGET_SPACE} options)")
+        print(f"  Budget bonus weight: {self.budget_bonus}")
 
         self.saliency_dict = saliency_dict
 
@@ -474,10 +437,29 @@ class RegrowthPolicyGradient:
         ent = (ent_b + ent_a) / 2.0
         return loss - beta * ent, ent
 
+    def _save_dir(self):
+        d = os.path.join(self.checkpoint_dir,
+                         f'{self.model_name}/{self.method}/{self.model_sparsity}')
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _save_best_model(self, epoch, reward, accuracy, model, allocation, frac):
+        p = os.path.join(self._save_dir(), f'best_ep{epoch + 1}_rwd{reward * 100:+.2f}pp.pth')
+        torch.save({
+            'epoch': epoch, 'reward': reward, 'accuracy': accuracy,
+            'model_state_dict': model.state_dict(),
+            'allocation': allocation, 'budget_frac': frac,
+            'timestamp': time.time(),
+        }, p)
+        print(f"  ✓ Best model saved: reward={reward * 100:+.2f}pp  acc={accuracy:.2f}% → {p}")
+        if self.run:
+            self.run.log({"best_reward_pp": reward * 100,
+                          "best_acc": accuracy,
+                          "best_epoch": epoch + 1,
+                          "best_budget_frac": frac})
+
     def solve_environment(self, resume_from=None):
-        t0 = time.time()
-        best_reward, best_alloc, best_regrow = float('-inf'), None, None
-        best_frac, best_reward_ep, start_ep = None, 0, 0
+        best_reward, best_frac, best_reward_ep, start_ep = float('-inf'), None, 0, 0
         reward_window = deque(maxlen=self.reward_window_size)
         stop_reason = ""
 
@@ -487,22 +469,20 @@ class RegrowthPolicyGradient:
             self.adam.load_state_dict(ckpt['optimizer_state_dict'])
             start_ep = ckpt['epoch'] + 1
             best_reward = ckpt['best_reward']
-            best_alloc = ckpt['best_allocation']
-            best_regrow = ckpt['best_regrow_indices']
             best_frac = ckpt.get('best_budget_frac')
+            if 'model_state_dict' in ckpt:
+                self._best_model_state = ckpt['model_state_dict']
             if 'reward_baseline' in ckpt:
                 self.reward_baseline = ckpt['reward_baseline']
             print(f"Resumed ep {start_ep}, best={best_reward:+.4f}")
 
         for epoch in range(start_ep, self.NUM_EPOCHS):
-            (ep_wlp, ep_budget_logits, ep_alloc_logits, reward,
-             alloc, sparsity, regrow_idx, frac) = self.play_episode(epoch)
+            (ep_wlp, ep_budget_logits, ep_alloc_logits,
+             reward, alloc, sparsity, frac) = self.play_episode(epoch)
 
             reward_window.append(reward)
             if reward > best_reward:
-                best_reward, best_reward_ep = reward, epoch
-                best_alloc, best_regrow, best_frac = alloc, copy.deepcopy(regrow_idx), frac
-                self._save_best_alloc(epoch, best_reward, best_alloc, best_regrow, best_frac)
+                best_reward, best_reward_ep, best_frac = reward, epoch, frac
 
             beta = self.get_entropy_coef(epoch)
             loss, ent = self.calculate_loss(ep_budget_logits, ep_alloc_logits, ep_wlp, beta)
@@ -546,32 +526,27 @@ class RegrowthPolicyGradient:
 
         print(f"\nBest: {best_reward * 100:+.2f}pp  frac={best_frac}"
               + (f"  [{stop_reason}]" if stop_reason else ""))
-        return best_alloc, best_reward, best_regrow, best_frac
+        return best_reward, best_frac
 
     def play_episode(self, epoch):
         self.agent.hidden = self.agent.init_hidden()
         prev_logits = torch.zeros(1, self.BUDGET_SPACE, device=self.DEVICE)
-        all_log_probs = []
-        budget_masked_logits = []
-        alloc_masked_logits = []
+        all_log_probs, budget_masked_logits, alloc_masked_logits = [], [], []
 
-        b_ctx = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float,
-                             device=self.DEVICE).unsqueeze(0)
+        b_ctx = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float, device=self.DEVICE).unsqueeze(0)
         b_logits = self.agent(prev_logits, b_ctx, step='budget').squeeze(0)
         b_dist = Categorical(probs=F.softmax(b_logits, dim=0))
         b_action = b_dist.sample()
         sel_frac = self.budget_fracs[b_action.item()]
-        target_rg = max(1, min(int(self.total_weights * sel_frac),
-                               sum(self.layer_capacities)))
+        target_rg = max(1, min(int(self.total_weights * sel_frac), sum(self.layer_capacities)))
 
         all_log_probs.append(b_dist.log_prob(b_action))
         budget_masked_logits.append(b_logits)
         prev_logits = b_logits.unsqueeze(0)
-
         print(f"  [Budget] frac={sel_frac:.4f} → {target_rg} weights")
 
-        ratio_opts = (torch.arange(self.ALLOC_SPACE, device=self.DEVICE,
-                                   dtype=torch.float) / (self.ALLOC_SPACE - 1))
+        ratio_opts = (torch.arange(self.ALLOC_SPACE, device=self.DEVICE, dtype=torch.float)
+                      / (self.ALLOC_SPACE - 1))
         remaining = target_rg
         sel_counts, pnames = [], []
 
@@ -592,8 +567,7 @@ class RegrowthPolicyGradient:
             masked = torch.where(feasible, logits, torch.full_like(logits, -1e9))
             dist = Categorical(probs=F.softmax(masked, dim=0))
             action = dist.sample()
-            chosen = int(c_opts[action].item())
-            chosen = min(chosen, cap, remaining)
+            chosen = min(int(c_opts[action].item()), cap, remaining)
             remaining = max(remaining - chosen, 0)
 
             sel_counts.append(chosen)
@@ -623,21 +597,25 @@ class RegrowthPolicyGradient:
         accuracy = self.evaluate_model(model_copy, full_eval=True)
         sparsity, _, _ = self.calculate_sparsity(model_copy)
 
+        # ── Reward: acc improvement over sparsity-matched baseline + budget utilization ──
+        actual_regrown = sum(len(v) for v in regrow_indices.values())
+        usage_ratio = actual_regrown / max(target_rg, 1)             # 0 → 1
+
         sp_frac = sparsity / 100.0
         baseline_acc = self.baseline_interp.get_baseline_acc(sp_frac)
         improvement = accuracy - baseline_acc
-        reward = improvement / 100.0
+        acc_term = improvement / 100.0                               # negative if below baseline
+        budget_term = self.budget_bonus * usage_ratio                # always ≥ 0
+        reward = acc_term + budget_term
 
-        print(f"  [Reward] acc={accuracy:.2f}%  "
-              f"baseline@sp={sp_frac:.4f}→{baseline_acc:.2f}%  "
-              f"Δ={improvement:+.2f}pp  reward={reward:+.4f}")
+        print(f"  [Reward] acc={accuracy:.2f}%  baseline@sp={sp_frac:.4f}→{baseline_acc:.2f}%  "
+              f"Δ={improvement:+.2f}pp  usage={usage_ratio:.2f}({actual_regrown}/{target_rg})  "
+              f"reward={reward:+.4f}(acc={acc_term:+.4f} + budget={budget_term:.4f})")
 
         if reward > self._best_reward_seen:
             self._best_reward_seen = reward
-            # TODO
             self._best_model_state = copy.deepcopy(model_copy.state_dict())
-            self._save_best_model(epoch, reward, accuracy, model_copy,
-                                  allocation, sel_frac)
+            self._save_best_model(epoch, reward, accuracy, model_copy, allocation, sel_frac)
 
         if self.reward_baseline is None:
             self.reward_baseline = reward
@@ -650,41 +628,7 @@ class RegrowthPolicyGradient:
         adv_t = torch.tensor(adv, device=self.DEVICE, dtype=torch.float)
         ep_wlp = torch.sum(ep_log_probs * adv_t).unsqueeze(0)
 
-        return ep_wlp, ep_budget_logits, ep_alloc_logits, reward, allocation, sparsity, regrow_indices, sel_frac
-
-    def _save_best_model(self, epoch, reward, accuracy, model, allocation, frac):
-        d = os.path.join(self.checkpoint_dir,
-                         f'{self.model_name}/{self.method}/{self.model_sparsity}')
-        os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, f'best_ep{epoch + 1}_rwd{reward * 100:+.2f}pp.pth')
-        # TODO
-        torch.save({
-            'epoch': epoch, 'reward': reward, 'accuracy': accuracy,
-            'model_state_dict': model.state_dict(),
-            'allocation': allocation, 'budget_frac': frac,
-            'timestamp': time.time(),
-        }, p)
-        print(f"  ✓ Best model: {p}")
-        if self.run:
-            self.run.log({"best_reward_pp": reward * 100,
-                          "best_epoch": epoch + 1,
-                          "best_budget_frac": frac})
-
-    def _save_best_alloc(self, epoch, reward, alloc, regrow, frac):
-        d = os.path.join(self.checkpoint_dir,
-                         f'{self.model_name}/{self.method}/{self.model_sparsity}')
-        os.makedirs(d, exist_ok=True)
-        # TODO
-        torch.save({
-            'epoch': epoch, 'best_reward': reward,
-            'best_allocation': alloc, 'best_regrow_indices': regrow,
-            'best_budget_frac': frac,
-            'agent_state_dict': self.agent.state_dict(),
-            'optimizer_state_dict': self.adam.state_dict(),
-            'reward_baseline': self.reward_baseline,
-            'timestamp': time.time(),
-        }, os.path.join(d, 'best_allocation.pth'))
-        print(f"  ✓ Best alloc: {reward * 100:+.2f}pp  frac={frac:.4f} @ ep {epoch + 1}")
+        return ep_wlp, ep_budget_logits, ep_alloc_logits, reward, allocation, sparsity, sel_frac
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -730,21 +674,11 @@ def main():
     parser.add_argument('--m_name', type=str, default='resnet20')
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--method', type=str, default='iterative')
-
-    # Baseline目录（存放所有pth文件的目录）
-    parser.add_argument('--baseline_dir', type=str, default="./resnet20/iterative/",
-                        help='Directory containing baseline .pth files (e.g., ./resnet20/iterative/)')
-
-    # 初始模型路径
-    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/iterative/iterative_0.9903.pth",
-                        help='Initial checkpoint path (if None, use baseline_dir/first file)')
-
-    # Sparsity
+    parser.add_argument('--baseline_dir', type=str, default="./resnet20/iterative/")
+    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/iterative/iterative_0.9903.pth")
     parser.add_argument('--start_sparsity', type=float, default=0.9903)
     parser.add_argument('--target_sparsity', type=float, default=0.97)
     parser.add_argument('--num_iters', type=int, default=20)
-
-    # RL
     parser.add_argument('--num_epochs', type=int, default=300)
     parser.add_argument('--learning_rate', type=float, default=3e-4)
     parser.add_argument('--hidden_size', type=int, default=64)
@@ -755,125 +689,88 @@ def main():
     parser.add_argument('--decay_fraction', type=float, default=0.4)
     parser.add_argument('--budget_space_size', type=int, default=5)
     parser.add_argument('--alloc_space_size', type=int, default=11)
-
-    # Budget search
     parser.add_argument('--min_budget_frac', type=float, default=0.001)
     parser.add_argument('--max_budget_frac', type=float, default=0.005)
-
-    # SSIM layer selection
+    parser.add_argument('--budget_bonus', type=float, default=0.02,
+                        help='Weight for budget utilization term in reward')
     parser.add_argument('--ssim_threshold', type=float, default=0)
     parser.add_argument('--ssim_num_batches', type=int, default=128)
-
-    # Regrowth
     parser.add_argument('--init_strategy', type=str, default='zero',
                         choices=['zero', 'kaiming', 'xavier'])
-
-    # Early stopping
     parser.add_argument('--early_stop_patience', type=int, default=40)
     parser.add_argument('--min_epochs', type=int, default=50)
     parser.add_argument('--reward_std_threshold', type=float, default=0.002)
     parser.add_argument('--reward_window_size', type=int, default=20)
-
-    # Misc
     parser.add_argument('--save_dir', type=str, default='./rl_checkpoints')
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--resume_iter', type=int, default=0)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--no_wandb', action='store_true', default=False)
-
-    parser.add_argument('--dataset', type=str, default="CIFAR10", help='dataset CIFAR10, tiny_imagenet')
+    parser.add_argument('--dataset', type=str, default="CIFAR10")
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--val_split', type=float, default=0.1)
     parser.add_argument('--num_workers', type=int, default=15)
-
-
     args = parser.parse_args()
-    set_seed(args.seed)
 
+    set_seed(args.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Device: {device}")
 
     train_loader, val_loader, test_loader = data_loader(
-        data_dir=args.data_dir,
-        val_split=args.val_split,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
+        data_dir=args.data_dir, val_split=args.val_split,
+        batch_size=args.batch_size, num_workers=args.num_workers,
         dataset=args.dataset,
     )
 
-    # TODO
     baseline_dict = load_baseline_from_folder(
-        model_name=args.m_name,
-        model_dir=args.baseline_dir,
-        device=device,
-        test_loader=test_loader
-    )
+        model_name=args.m_name, model_dir=args.baseline_dir,
+        device=device, test_loader=test_loader)
     baseline_interp = BaselineInterpolator(baseline_dict)
-    initial_ckpt = args.initial_ckpt
 
-    print(f"Initial checkpoint: {initial_ckpt}")
-
-    # Total prunable weights
     _ref = model_loader(args.m_name, device)
     prune_weights_reparam(_ref)
-    _ref.load_state_dict(torch.load(initial_ckpt))
+    _ref.load_state_dict(torch.load(args.initial_ckpt))
     total_weights, _, _ = count_pruned_params(_ref)
     del _ref
     print(f"Total prunable weights: {total_weights:,}\n")
 
-    # wandb
     if not args.no_wandb:
         run = wandb.init(
             project="ICCAD_saliency_iterative_v3",
-            name=(f"{args.m_name}_{args.start_sparsity:.4f}"
-                  f"_ssim{args.ssim_threshold}"),
+            name=f"{args.m_name}_{args.start_sparsity:.4f}_ssim{args.ssim_threshold}",
             config=vars(args) | {"total_weights": total_weights},
         )
     else:
         run = None
 
-    # Pretrained (dense) model
     print("Loading pretrained (dense) model…")
     model_pretrained = model_loader(args.m_name, device)
     load_model_name(model_pretrained, f'./{args.m_name}/checkpoint', args.m_name)
     model_pretrained.eval()
 
-    # Saliency: computed ONCE on pretrained for ALL masked layers
-    print("\nLoading initial sparse model to enumerate all masked layers…")
+    print("\nEnumerating masked layers for saliency…")
     _init_sparse = model_loader(args.m_name, device)
     prune_weights_reparam(_init_sparse)
-    _init_sparse.load_state_dict(torch.load(initial_ckpt))
+    _init_sparse.load_state_dict(torch.load(args.initial_ckpt))
     all_masked_layers = [name for name, m in _init_sparse.named_modules()
                          if hasattr(m, 'weight_mask') and len(name) > 0]
     del _init_sparse
     print(f"  Found {len(all_masked_layers)} masked layers → computing saliency…")
 
-    print("\n" + "=" * 70)
-    print("ONE-TIME saliency on ALL masked layers (pretrained model)")
-    print("=" * 70)
     saliency_dict = SaliencyComputer(
-        model=model_pretrained,
-        criterion=nn.CrossEntropyLoss(),
-        device=device,
-    ).compute_saliency_scores(
-        data_loader=train_loader,
-        target_layers=all_masked_layers,
-    )
-    print("=" * 70 + "\n")
+        model=model_pretrained, criterion=nn.CrossEntropyLoss(), device=device,
+    ).compute_saliency_scores(data_loader=train_loader, target_layers=all_masked_layers)
 
-    # Load starting sparse model
     current_model = model_loader(args.m_name, device)
     prune_weights_reparam(current_model)
-
     if args.resume_iter > 0:
         ckp = os.path.join(args.save_dir,
-                           f'{args.m_name}/{args.method}'
-                           f'/iter_{args.resume_iter - 1}/best_grown_model.pth')
+                           f'{args.m_name}/{args.method}/iter_{args.resume_iter - 1}/best_grown_model.pth')
         assert os.path.exists(ckp), f"Resume ckpt not found: {ckp}"
         current_model.load_state_dict(torch.load(ckp))
         print(f"Resumed from iter {args.resume_iter}: {ckp}")
     else:
-        current_model.load_state_dict(torch.load(initial_ckpt))
+        current_model.load_state_dict(torch.load(args.initial_ckpt))
 
     acc0 = quick_eval(current_model, test_loader, device)
     sp0 = get_sparsity(current_model)
@@ -885,9 +782,6 @@ def main():
                  "iter_summary/accuracy": acc0,
                  "iter_summary/sparsity": sp0})
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # Iterative loop
-    # ═════════════════════════════════════════════════════════════════════════
     for iter_idx in range(args.resume_iter, args.num_iters):
         cur_sp = get_sparsity(current_model)
         cur_acc = quick_eval(current_model, test_loader, device)
@@ -899,26 +793,21 @@ def main():
               f"gap={cur_acc - bline:+.2f}pp")
         print(f"{'#' * 70}\n")
 
-        # Feature-SSIM: select search space
         target_layers, ssim_scores = SSIMLayerSelector.update_search_space(
-            sparse_model=current_model,
-            pretrained_model=model_pretrained,
-            data_loader_ref=test_loader,
-            threshold=args.ssim_threshold,
+            sparse_model=current_model, pretrained_model=model_pretrained,
+            data_loader_ref=test_loader, threshold=args.ssim_threshold,
             num_batches=args.ssim_num_batches,
         )
         if run:
             for lname, sc in ssim_scores.items():
                 run.log({f"ssim/{lname}": sc, "ssim_iter": iter_idx + 1})
 
-        # Layer capacities
         layer_capacities = get_layer_capacities(current_model, target_layers)
         if sum(layer_capacities) == 0:
             print("  All pruned weights restored. Stopping.")
             break
 
         sp_label = f"iter{iter_idx}_sp{cur_sp / 100:.4f}"
-
         config = {
             'num_epochs': args.num_epochs,
             'learning_rate': args.learning_rate,
@@ -934,6 +823,7 @@ def main():
             'end_beta': args.end_beta,
             'decay_fraction': args.decay_fraction,
             'init_strategy': args.init_strategy,
+            'budget_bonus': args.budget_bonus,
             'early_stop_patience': args.early_stop_patience,
             'min_epochs': args.min_epochs,
             'reward_std_threshold': args.reward_std_threshold,
@@ -945,21 +835,15 @@ def main():
         }
 
         pg = RegrowthPolicyGradient(
-            config=config,
-            model_sparse=current_model,
-            saliency_dict=saliency_dict,
-            target_layers=target_layers,
-            train_loader=train_loader,
-            test_loader=test_loader,
-            device=device,
-            baseline_interp=baseline_interp,
-            total_weights=total_weights,
+            config=config, model_sparse=current_model, saliency_dict=saliency_dict,
+            target_layers=target_layers, train_loader=train_loader,
+            test_loader=test_loader, device=device,
+            baseline_interp=baseline_interp, total_weights=total_weights,
             wandb_run=run,
         )
 
         resume_path = args.resume if (iter_idx == args.resume_iter and args.resume) else None
-        best_alloc, best_reward, _, best_frac = pg.solve_environment(
-            resume_from=resume_path)
+        best_reward, best_frac = pg.solve_environment(resume_from=resume_path)
 
         best_model = pg.get_best_model() or current_model
         iter_acc = quick_eval(best_model, test_loader, device)
@@ -967,8 +851,7 @@ def main():
         iter_base = baseline_interp.get_baseline_acc(iter_sp / 100.0)
 
         print(f"\n  [Iter {iter_idx + 1}] acc={iter_acc:.2f}%  "
-              f"sp={iter_sp:.2f}%  Δbaseline={iter_acc - iter_base:+.2f}pp  "
-              f"frac={best_frac}")
+              f"sp={iter_sp:.2f}%  Δbaseline={iter_acc - iter_base:+.2f}pp  frac={best_frac}")
 
         if run:
             run.log({
@@ -994,7 +877,6 @@ def main():
             print(f"  Target sparsity {args.target_sparsity * 100:.1f}% reached.")
             break
 
-    # Final
     final_acc = quick_eval(current_model, test_loader, device)
     final_sp = get_sparsity(current_model)
     final_base = baseline_interp.get_baseline_acc(final_sp / 100.0)
