@@ -624,7 +624,7 @@ class OneshotStructuredRegrowthPG:
             target_layers=self.target_layers,
         ).to(self.DEVICE)
 
-        pre_ft_state = copy.deepcopy(new_model.state_dict())  # 涨了但未 finetune
+        pre_ft_model = copy.deepcopy(new_model)  # 涨了但未 finetune 的模型
         self.mini_finetune(new_model, epochs=self.finetune_epochs)
 
         accuracy = self.evaluate_model(new_model, full_eval=True)
@@ -640,8 +640,8 @@ class OneshotStructuredRegrowthPG:
 
         if reward > self._best_reward_seen:
             self._best_reward_seen = reward
-            self._best_model_state = pre_ft_state  # 存涨了但未 finetune 的
-            self._save_best(epoch, reward, accuracy, pre_ft_state)
+            self._best_model_state = copy.deepcopy(pre_ft_model.state_dict())
+            self._save_best(epoch, reward, accuracy, pre_ft_model)
 
         if self.reward_baseline is None:
             self.reward_baseline = reward
@@ -656,12 +656,14 @@ class OneshotStructuredRegrowthPG:
 
         return ep_wlp, ep_budget_logits, ep_alloc_logits, reward, sparsity, target_ch
 
-    def _save_best(self, epoch, reward, accuracy, state_dict):
+    def _save_best(self, epoch, reward, accuracy, model):
         p = os.path.join(self._save_dir(), f'best_ep{epoch + 1}_rwd{reward:+.4f}.pth')
-        torch.save({
-            'epoch': epoch, 'reward': reward, 'accuracy_mini_ft': accuracy,
-            'model_state_dict': state_dict,  # 涨了但未 finetune 的权重
-        }, p)
+        model_to_save = copy.deepcopy(model)
+        for m in model_to_save.modules():
+            m._forward_hooks.clear()
+            m._backward_hooks.clear()
+            m._forward_pre_hooks.clear()
+        torch.save(model_to_save, p)
         print(f"  ✓ Best (pre-finetune): reward={reward:+.4f}  mini_ft_acc={accuracy:.2f}% → {p}")
         if self.run:
             self.run.log({"best_reward": reward, "best_mini_ft_acc": accuracy,
