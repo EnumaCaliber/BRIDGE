@@ -4,9 +4,9 @@ This folder contains code and experiment artifacts for both **one-shot magnitude
 The four main regrowth implementations are:
 
 - **regrowth_iterative.py, regrowth_oneshot.py for unstructure prune**
-- **regrowth_structure_oneshot.py for unstructure prune** 
+- **regrowth_structure_oneshot.py, regrowth_structure_iterative.py for unstructure prune** 
 
-A timing benchmark comparing both approaches is provided in `benchmark_regrowth_methods.py` and `quick_benchmark.py`.
+
 
 ---
 
