@@ -3,8 +3,8 @@ This folder contains code and experiment artifacts for both **one-shot magnitude
 
 The four main regrowth implementations are:
 
-- **Reference-based regrowth** (`rl_regrowth_nas.py`): RL-based NAS allocates regrowth per-layer; within each layer weights are selected using **SSIM-based layer priority** + **reference masks/weights**.
-- **Saliency-based regrowth** (`rl_saliency_regrowth.py`): RL-based NAS allocates regrowth per-layer; within each layer weights are selected via: $s_i \propto \left(\frac{\partial \mathcal{L}}{\partial \theta_i}\right)^2\,\theta_i^2$.
+- **regrowth_iterative.py, regrowth_oneshot.py for unstructure prune**
+- **regrowth_structure_oneshot.py for unstructure prune** 
 
 A timing benchmark comparing both approaches is provided in `benchmark_regrowth_methods.py` and `quick_benchmark.py`.
 
