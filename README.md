@@ -32,29 +32,15 @@ Regrowth is usually done to move from **98% sparsity → 97% sparsity** (i.e., r
 
 ## Folder Overview
 
-### Training / pruning
+### Training/pruning
 - `pretrain.py`, `prune_stucture.py`，`prune_unstucture.py`: CIFAR10 pretraining + iterative pruning loop (saves pruned checkpoints)
 - `models/model_loader.py`: constructs models (`resnet20`, `vgg16`, `effnet`, …)
 - `data/data_loader.py`: CIFAR-10 dataloaders
 - `utils/analysis_tools.py`: pruning reparam helpers, SSIM feature extraction, mask stats
 
 ### Regrowth
-- `rl_regrowth_nas.py`: RL allocation + reference-mask selection
-- `rl_saliency_regrowth.py`: RL allocation + saliency-based selection
-
-### Metrics / analysis
-- `utils/analysis_utils.py`:
-  - `count_pruned_params(model)` — counts total vs surviving parameters
-  - SSIM utilities: `BlockwiseFeatureExtractor`, `compute_block_ssim`
-- `utils/saliency_analysis.py`: FairPrune-style saliency computation + plots
-- `single_layer_regrowth_analysis.py`: runs “all budget on one layer” experiments (tests SSIM ↔ improvement correlation)
-
-### Benchmarking
-- `benchmark_regrowth_methods.py`: end-to-end timing benchmark (SSIM vs saliency preprocessing, selection, mask update, mini-finetune)
-- `quick_benchmark.py`: one-episode benchmark wrapper
-
-### Inspecting / selective finetuning
-- `inspect_checkpoint.py`: inspection + finetune flows for saved checkpoints
+- `regrowth_iterative.py`, `regrowth_oneshot.py`: for regrowth unstructure prune.
+- `regrowth_structure_oneshot.py`: for regrowth structure prune.
 
 ---
 
