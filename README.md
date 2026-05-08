@@ -34,9 +34,9 @@ Regrowth is usually done to move from **98% sparsity → 97% sparsity** (i.e., r
 
 ### Training / pruning
 - `main.py`: CIFAR10 pretraining + iterative pruning loop (saves pruned checkpoints)
-- `utils/model_loader.py`: constructs models (`resnet20`, `vgg16`, `alexnet`, …)
-- `utils/data_loader.py`: CIFAR-10 dataloaders
-- `utils/analysis_utils.py`: pruning reparam helpers, SSIM feature extraction, mask stats
+- `models/model_loader.py`: constructs models (`resnet20`, `vgg16`, `alexnet`, …)
+- `data/data_loader.py`: CIFAR-10 dataloaders
+- `utils/analysis_tools.py`: pruning reparam helpers, SSIM feature extraction, mask stats
 
 ### Regrowth
 - `rl_regrowth_nas.py`: RL allocation + reference-mask selection
