@@ -45,7 +45,7 @@ def load_baseline_from_folder(model_name, model_dir, device, test_loader):
         filename = pth_file.name
         match = re.search(r'(\d+\.\d+)', filename)
         if not match:
-            print(f"  警告: 无法从文件名提取稀疏度: {filename}")
+            print(f"  Warning: cannot extract sparsity from filename: {filename}")
             continue
         sparsity = float(match.group(1))
         try:
@@ -71,12 +71,12 @@ def load_baseline_from_folder(model_name, model_dir, device, test_loader):
             baseline_dict[sparsity] = accuracy
             print(f"  {filename}: sparsity={sparsity:.4f}, accuracy={accuracy:.2f}%")
         except Exception as e:
-            print(f"  错误处理 {filename}: {e}")
+            print(f"  Error processing {filename}: {e}")
 
     baseline_dict = dict(sorted(baseline_dict.items()))
-    print(f"\nBaseline表构建完成: {len(baseline_dict)} 个点")
-    print(f"  稀疏度范围: {min(baseline_dict.keys()):.4f} ~ {max(baseline_dict.keys()):.4f}")
-    print(f"  准确率范围: {min(baseline_dict.values()):.2f}% ~ {max(baseline_dict.values()):.2f}%")
+    print(f"\nBaseline table built: {len(baseline_dict)} points")
+    print(f"  Sparsity range: {min(baseline_dict.keys()):.4f} ~ {max(baseline_dict.keys()):.4f}")
+    print(f"  Accuracy range: {min(baseline_dict.values()):.2f}% ~ {max(baseline_dict.values()):.2f}%")
     print("=" * 60 + "\n")
     return baseline_dict
 

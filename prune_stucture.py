@@ -59,7 +59,7 @@ checkpoint = torch.load(f'./{args.m_name}/checkpoint/{cktp}')
 net.load_state_dict(checkpoint['net'])
 net.eval()
 
-dense_model = copy.deepcopy(net)  # 备份 dense
+dense_model = copy.deepcopy(net)
 
 # -------------------------------------------------------
 #

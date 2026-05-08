@@ -92,7 +92,7 @@ def find_drop_point_by_residual(df):
         critical_point = df.iloc[critical_idx]
         prev_point = df.iloc[critical_idx - 1] if critical_idx > 0 else None
 
-        print(f"⚠️  Critical point detected at index {critical_idx}:")
+        print(f"   Critical point detected at index {critical_idx}:")
         print(f"   Sparsity: {critical_point['sparsity']:.2f}%")
         print(f"   Accuracy: {critical_point['accuracy']:.2f}%")
         print(f"   Residual: {critical_residual:.4f} (vs avg {avg_residual:.4f})")
@@ -133,7 +133,7 @@ def find_drop_point_by_segmented_fit(df):
     if best_split_idx is not None:
         split_point = df.iloc[best_split_idx]
 
-        print(f"\n📊 Segmented regression analysis:")
+        print(f"\n Segmented regression analysis:")
         print(f"   Best split point at sparsity: {split_point['sparsity']:.2f}%")
         print(f"   Accuracy at split: {split_point['accuracy']:.2f}%")
 
@@ -245,14 +245,14 @@ def main():
 
     if critical_point is not None:
         print("\n" + "=" * 70)
-        print("💡 RECOMMENDATION:")
+        print("    RECOMMENDATION:")
         print(f"   Maximum safe sparsity: {critical_point['sparsity']:.2f}%")
         print(f"   Expected accuracy: {critical_point['accuracy']:.2f}%")
         print(f"   (Accuracy starts to degrade rapidly beyond this point)")
         print("=" * 70)
     elif split_point is not None:
         print("\n" + "=" * 70)
-        print("💡 RECOMMENDATION:")
+        print("    RECOMMENDATION:")
         print(f"   Maximum safe sparsity: {split_point['sparsity']:.2f}%")
         print(f"   Expected accuracy: {split_point['accuracy']:.2f}%")
         print("=" * 70)

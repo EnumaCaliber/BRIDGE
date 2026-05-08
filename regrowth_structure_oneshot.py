@@ -107,7 +107,7 @@ def get_layer_capacities(dense_model, pruned_model, target_layers):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def match_to_dense(model, dense_model, layer_name):
-    """返回 {model_ch_idx: dense_ch_idx}，通过权重相似度匹配。"""
+
     d_m = dict(dense_model.named_modules())[layer_name]
     m_m = dict(model.named_modules()).get(layer_name)
     if m_m is None:
@@ -123,7 +123,7 @@ def match_to_dense(model, dense_model, layer_name):
 
 
 def build_pruned_to_dense(pruned_model, dense_model, target_layers):
-    """预计算 pruned model 每层的通道对应关系，只需算一次。"""
+
     print("Building pruned↔dense channel mapping…")
     result = {}
     for lname in target_layers:
@@ -138,11 +138,7 @@ def apply_config_with_matched_transfer(pruned_model, dense_model,
                                        new_config, original_channels,
                                        example_inputs, channel_scores,
                                        pruned_to_dense, target_layers):
-    """
-    重建模型并做正确的权重转移：
-    dense → tp 剪到 new_config → 找 new↔dense 对应 → 按对应关系复制 pruned 权重
-    """
-    # 重建结构
+
     model = copy.deepcopy(dense_model)
     pruning_ratio_dict = {}
     for name, module in model.named_modules():
@@ -161,11 +157,11 @@ def apply_config_with_matched_transfer(pruned_model, dense_model,
         )
         pruner.step()
 
-    # 找 new_model 每个通道对应 dense 哪个 index
+
     new_to_dense = {lname: match_to_dense(model, dense_model, lname)
                     for lname in target_layers}
 
-    # dense_idx → pruned_idx 反向映射
+
     dense_to_pruned = {
         lname: {d: p for p, d in pruned_to_dense[lname].items()}
         for lname in target_layers
@@ -173,7 +169,7 @@ def apply_config_with_matched_transfer(pruned_model, dense_model,
 
     p_mods = dict(pruned_model.named_modules())
     with torch.no_grad():
-        # target layers 的 Conv：按通道对应关系复制
+
         for lname in target_layers:
             n_m = dict(model.named_modules()).get(lname)
             p_m = p_mods.get(lname)
@@ -188,9 +184,9 @@ def apply_config_with_matched_transfer(pruned_model, dense_model,
                     n_m.weight.data[n_idx, :min_in] = p_m.weight.data[p_idx, :min_in]
                     if n_m.bias is not None and p_m.bias is not None:
                         n_m.bias.data[n_idx] = p_m.bias.data[p_idx]
-                # else: 新通道，保留 dense 权重
 
-        # 非 target layer 的 Conv：按 index 复制
+
+
         for name, n_m in model.named_modules():
             if not isinstance(n_m, nn.Conv2d) or name in target_layers:
                 continue
@@ -311,7 +307,7 @@ class TaylorChannelScorer:
 
 
 def select_channels_by_taylor(channel_scores, pruned_to_dense, layer_name, n_restore):
-    """从被剪掉的通道里，按 Taylor 分数选 top-n。"""
+
     scores     = channel_scores.get(layer_name, {})
     kept_dense = set(pruned_to_dense.get(layer_name, {}).values())
     pruned_set = set(scores.keys()) - kept_dense
@@ -600,7 +596,7 @@ class OneshotStructuredRegrowthPG:
         usage_ratio     = actual_restored / max(target_ch, 1)
         print(f"  [Alloc] {actual_restored}/{target_ch} | {allocation}")
 
-        # 用 Taylor 分数选具体通道，更新 new_config
+
         new_config = dict(self.pruned_config)
         for lname, n_add in allocation.items():
             chs = select_channels_by_taylor(
@@ -612,7 +608,7 @@ class OneshotStructuredRegrowthPG:
                 )
                 print(f"    {lname}: +{len(chs)} ch (top3: {chs[:3]})")
 
-        # 重建 + 正确权重转移
+
         new_model = apply_config_with_matched_transfer(
             pruned_model=self.model_sparse,
             dense_model=self.dense_model,
@@ -773,7 +769,7 @@ def main():
         data_loader=train_loader, n_batches=args.taylor_batches,
     )
 
-    # 预计算 pruned↔dense 通道对应（只需一次）
+
     pruned_to_dense  = build_pruned_to_dense(pruned_model, dense_model, selected_layers)
     layer_capacities = get_layer_capacities(dense_model, pruned_model, selected_layers)
 
