@@ -47,10 +47,10 @@ Regrowth is usually done to move from **98% sparsity → 97% sparsity** (i.e., r
 ## Setup
 
 ### Environment
-Plase check `requirements.txt` for details, and you can use `pip install -r requirements.txt` to install all required packages.
+Please check `requirements.txt` for details, and you can use `pip install -r requirements.txt` to install all required packages.
 
 ### Data
-`utils/data_loader.py` uses `data_dir='./data'` by default, which will download the required dataset if it is not provided.
+`data/data_loader.py` uses `data_dir='./data'` by default, which will download the required dataset if it is not provided.
 
 ---
 
