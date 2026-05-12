@@ -23,7 +23,7 @@ You start from a **highly sparse** (pruned) network with masks (PyTorch pruning 
 
 - pick $K$ indices among currently pruned weights (`weight_mask == 0`)
 - set `weight_mask[idx] = 1`
-- initialize the newly regrown weights (copy from reference, zeros, Kaiming, etc.)
+- Initialize the newly regrown weights (copy from reference, zeros, Kaiming, etc.)
 - optionally mini-finetune / finetune to recover accuracy
 
 Regrowth is usually done to move from **98% sparsity → 97% sparsity** (i.e., regrow 1% of all weights).
@@ -78,7 +78,7 @@ Pretraining and pruning are combined in `main.py`.
 
 Key args (from `main.py`):
 - `--m_name`: `resnet20`, `vgg16`, `effnet`, ...,
-- If your dataset is tiny-imagenet. --'m_name' should be: 
+- If your dataset is tiny-imagenet. --`m_name` should be: 
 - `--pruner`: pruning method (passed into `weight_pruner_loader(args.pruner)`)
 - `--iter_start`, `--iter_end`: pruning iterations
 - `--max_epochs`, `--patience`: early stopping
