@@ -58,7 +58,7 @@ Please check `requirements.txt` for details, and you can use `pip install -r req
 
 Most experiments follow this pipeline:
 
-1. **Pretrain** a dense model (or resume from `./{model}/checkpoint/ckpt.pth`)
+1. **Pretrain** a dense model
 2. **Prune + finetune** to a target sparsity (e.g., 0.99)
 3. **Regrow** some weights (e.g., 2% of total, **adjustable**) to a less sparse target (0.97)
 4. **Finetune selectively or fully** to recover accuracy
