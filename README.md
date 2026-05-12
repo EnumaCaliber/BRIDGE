@@ -88,46 +88,6 @@ Example (prune to 99% sparsity checkpoint expected by benchmarks):
 python main.py --m_name resnet20 --pruner magnitude --iter_end 1
 ```
 
-### Prune rate note (ICLR2021 LAMP codepath)
-
-If you run pruning via the ICLR2021 implementation under `iclr2021_solution/` (used for LAMP-style layerwise sparsity), the **prune rate is not controlled by `main.py`**.
-
-Instead, the per-iteration prune amount is returned by:
-
-- `iclr2021_solution/tools/modelloaders.py` → `model_and_opt_loader(...)` → `amount`
-
-In `iclr2021_solution/iterate.py`, this value is loaded as:
-
-- `_, amount_per_it, batch_size, opt_pre, opt_post = model_and_opt_loader(args.model, DEVICE)`
-
-and then applied each iteration as:
-
-- `pruner(model, amount_per_it)`
-
-**Illustration (what to edit):**
-
-```python
-# iclr2021_solution/tools/modelloaders.py
-elif model_string == 'resnet20':
-  model = ResNet20().to(DEVICE)
-  amount = 0.985  # <-- adjust this prune rate
-```
-
-Practical guidance:
-- Larger `amount` means **more weights pruned per iteration**.
-- Total pruning depends on both `amount` **and** the number of prune iterations you run in `iterate.py` via `--iter_end`.
-
-Example run:
-
-```bash
-python iclr2021_solution/iterate.py --model resnet20 --pruner lamp --iter_end 10
-```
-
-This should produce:
-- `./resnet20/ckpt_after_prune/pruned_finetuned_mask_0.99.pth`
-
----
-
 ### 2) Regrowth methods
 
 #### A. Reference-based regrowth (SSIM + reference masks)
