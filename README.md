@@ -65,7 +65,8 @@ Most experiments follow this pipeline:
 
 Artifacts are usually saved under:
 - `./{model_name}/checkpoint/ckpt.pth` (dense / baseline)
-- `./{model_name}/ckpt_after_prune/pruned_finetuned_mask_{sparsity}.pth` (sparse checkpoint)
+- `./{model_name}/iterative/{model_name}_{sparsity}.pth` (sparse checkpoint for iterative)
+- `./{model_name}/oneshot/{model_name}_{sparsity}.pth` (sparse checkpoint for oneshot)
 - `./rl_regrow_savedir/...` or `./rl_saliency_regrow_savedir/...` (RL training outputs)
 
 ---
