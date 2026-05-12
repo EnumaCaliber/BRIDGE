@@ -77,7 +77,8 @@ Artifacts are usually saved under:
 Pretraining and pruning are combined in `main.py`.
 
 Key args (from `main.py`):
-- `--m_name`: `resnet20`, `vgg16`, `alexnet`, ...
+- `--m_name`: `resnet20`, `vgg16`, `effnet`, ...,
+- If your dataset is tiny-imagenet. --'m_name' should be: 
 - `--pruner`: pruning method (passed into `weight_pruner_loader(args.pruner)`)
 - `--iter_start`, `--iter_end`: pruning iterations
 - `--max_epochs`, `--patience`: early stopping
