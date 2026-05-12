@@ -67,8 +67,8 @@ Artifacts are usually saved under:
 - `./{model_name}/checkpoint/ckpt.pth` (dense / baseline)
 - `./{model_name}/iterative/{model_name}_{sparsity}.pth` (sparse checkpoint for iterative)
 - `./{model_name}/oneshot/{model_name}_{sparsity}.pth` (sparse checkpoint for oneshot)
-- For iterative regrowth: After regrowth, the final best model will be saved to '{save_dir}/{m_name}/{method}/iter_{iter_idx}/best_grown_model.pth.'
-- For oneshot regrowth: After regrowth, the final best model will be saved to '{save_dir}/{m_name}/oneshot/{model_sparsity}/baseline_exceeded_ep{epoch+1}_acc{accuracy:.2f}.pth.'
+- For iterative regrowth: After regrowth, the final best model will be saved to `{save_dir}/{m_name}/{method}/iter_{iter_idx}/best_grown_model.pth.`
+- For oneshot regrowth: After regrowth, the final best model will be saved to `{save_dir}/{m_name}/oneshot/{model_sparsity}/baseline_exceeded_ep{epoch+1}_acc{accuracy:.2f}.pth.`
 
 ---
 
