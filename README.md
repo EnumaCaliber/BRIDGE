@@ -87,8 +87,8 @@ Key args (from `main.py`):
 
 #### A. Reference-based regrowth (SSIM + reference masks)
 - Implemented in `regrowth_iterative.py` for iterative regrowth and `regrowth_oneshot.py` for oneshot regrowth
-- There is some different in iterative and oneshot
-- # TODO
+- There is some different in iterative and one-shot
+
 
 
 Core ideas:
