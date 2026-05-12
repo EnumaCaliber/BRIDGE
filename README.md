@@ -78,21 +78,18 @@ Pretraining and pruning are combined in `main.py`.
 
 Key args (from `main.py`):
 - `--m_name`: `resnet20`, `vgg16`, `effnet`, ...,
-- If your dataset is tiny-imagenet. --`m_name` should be: 
+- If your dataset is tiny-imagenet. --`m_name` should be: VGGTinyImageNet, EfficientNetB0TinyImageNet...
+- And you can define your model in `./models/model_loader.py.`
 - `--pruner`: pruning method (passed into `weight_pruner_loader(args.pruner)`)
 - `--iter_start`, `--iter_end`: pruning iterations
-- `--max_epochs`, `--patience`: early stopping
-
-Example (prune to 99% sparsity checkpoint expected by benchmarks):
-
-```bash
-python main.py --m_name resnet20 --pruner magnitude --iter_end 1
-```
 
 ### 2) Regrowth methods
 
 #### A. Reference-based regrowth (SSIM + reference masks)
-Implemented in `rl_regrowth_nas.py`.
+- Implemented in `regrowth_iterative.py` for iterative regrowth and `regrowth_oneshot.py` for oneshot regrowth
+- There is some different in iterative and oneshot
+- # TODO
+
 
 Core ideas:
 1. **Layer priority** is computed once using **SSIM** between feature maps from:
