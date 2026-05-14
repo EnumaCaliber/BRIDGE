@@ -100,12 +100,8 @@ Core ideas:
    Lower SSIM → more feature drift → higher priority for regrowth.
 
 2. **Allocation**: an LSTM controller samples an allocation ratio per target layer.
-3. **Selection**: within each layer, select weights to regrow using **reference masks/weights** (e.g., from 0.95 sparse checkpoint).
+3. **Selection**: within each layer, select weights to regrow using **saliency sore**.
 4. **(Mini)Finetune** to evaluate reward.
-
-Core ideas:
-1. RL controller allocates the regrowth budget across layers.
-2. A `SaliencyComputer` estimates per-weight importance using:
 
 $$\text{saliency}(\theta_i) \approx \left(\frac{\partial L}{\partial \theta_i}\right)^2 \cdot \theta_i^2$$
 
