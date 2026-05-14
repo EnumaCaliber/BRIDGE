@@ -158,18 +158,6 @@ Interpretation:
 - higher saliency ⇒ parameter is important for loss/accuracy
 - regrow highest-saliency weights among currently pruned positions (RigL-inspired)
 
----
-#### Quick (single episode)
-```bash
-python quick_benchmark.py --m_name resnet20
-```
-
-#### Full benchmark (multiple runs, plots)
-```bash
-python benchmark_regrowth_methods.py --m_name resnet20 --num_runs 3
-```
----
-
 ## Quickstart recipes
 
 ### 0. Produce the required sparse checkpoint(s)
