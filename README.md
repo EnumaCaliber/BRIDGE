@@ -107,8 +107,8 @@ $$\text{saliency}(\theta_i) \approx \left(\frac{\partial L}{\partial \theta_i}\r
 
 This is a Fisher/Hessian-diagonal approximation plus magnitude scaling.
 
-3. `SaliencyBasedRegrowth.apply_regrowth(...)` selects the top-K pruned weights by saliency and updates the mask.
-4. Newly regrown weights can be initialized via `--init_strategy`.
+5. `SaliencyBasedRegrowth.apply_regrowth(...)` selects the top-K pruned weights by saliency and updates the mask.
+6. Newly regrown weights can be initialized via `--init_strategy`.
 ---
 
 ### 3) Growth metrics (what to report)
