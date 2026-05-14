@@ -205,19 +205,6 @@ The table below summarizes the VGG16 results from your tracking sheet.
 | 91.30 | step4 | 91.59 | +0.29 |
 
 ---
-### PART2: Growth Metric Evaluation
-
-Below is a **single-episode** timing breakdown (VGG16 @ 99% sparsity, regrow $K\approx 147{,}155$ weights, CUDA).
-
-### Weight selection time comparison
-
-| Method | Weight selection total (s) | Notes |
-|---|---:|---|
-| Reference-based (SSIM + reference masks/weights) | 0.0178 | Includes loading reference masks/weights (0.0012s) and selecting 147,148 weights (0.0166s) |
-| Saliency-based (gradient saliency) | 0.0041 | Selects 147,148 weights by direct saliency ranking |
-
-In this run, saliency-based selection is $\approx 4.38\times$ faster (absolute savings: 0.0137s). 
-
 
 ## Citation
 
