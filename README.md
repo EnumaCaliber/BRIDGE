@@ -158,34 +158,6 @@ Interpretation:
 - higher saliency ⇒ parameter is important for loss/accuracy
 - regrow highest-saliency weights among currently pruned positions (RigL-inspired)
 
-## Quickstart recipes
-
-### 0. Produce the required sparse checkpoint(s)
-Most regrowth and benchmark scripts assume the 99% sparse checkpoint exists:
-
-```bash
-python main.py --m_name resnet20 --pruner magnitude --iter_end 1
-```
-
-### 1. Run a single-episode timing comparison
-
-```bash
-python quick_benchmark.py --m_name resnet20
-```
-
-### 2. Test whether SSIM actually predicts “good layers to regrow”
-
-`single_layer_regrowth_analysis.py` applies the *full* global regrowth budget to one layer at a time, then finetunes and measures the recovered accuracy.
-
-```bash
-python single_layer_regrowth_analysis.py --m_name resnet20
-```
-
-### 3. Compute and visualize FairPrune-style saliency (analysis-only)
-
-Use `utils/saliency_analysis.py` if you want diagnostic plots (per-layer / per-class distributions). This is separate from the RL saliency regrowth code.
-
----
 ## Experiment results (VGG16, CIFAR-10)
 ### PART1: Regrowth
 
