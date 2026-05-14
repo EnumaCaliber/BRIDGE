@@ -198,11 +198,11 @@ The table below summarizes the VGG16 results from your tracking sheet.
 ### Regrowth Outcome (start from 99% sparsity)
 
 | Baseline | Step | Result | Improvement |
-|---:|---:|---:|---:|
-| 91.93 | step1 | 92.33 | +0.40 |
-| 92.27 | step2 | 92.41 | +0.14 |
-| 92.41 | step3 | 92.57 | +0.16 |
-| 92.43 | step4 | 92.73 | +0.30 |
+|----:|----:|----:|----:|
+| 92.22 | step1 | 92.54 | +0.32 |
+| 92.02 | step2 | 92.32 | +0.30 |
+| 91.75 | step3 | 92.62 | +0.87 |
+| 91.30 | step4 | 91.59 | +0.29 |
 
 ---
 ### PART2: Growth Metric Evaluation
