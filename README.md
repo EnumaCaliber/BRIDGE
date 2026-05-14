@@ -88,8 +88,8 @@ Key args (from `main.py`):
 #### A. Reference-based regrowth (SSIM + reference masks)
 - Implemented in `regrowth_iterative.py` for iterative regrowth and `regrowth_oneshot.py` for oneshot regrowth
 - There is some difference in iterative regrowth and one-shot regrowth
-- In iterative regrowth,  you can use --budget_space_size --min_budget_frac --max_budget_frac to define how may sparsity regrowth in eatch iterative.
-- In oneshot regrowth, you can use --regrow_step to set how much sparsity you need regrowth.
+- In iterative regrowth, you can use `--budget_space_size`,` --min_budget_frac`, and `--max_budget_frac` to define how much sparsity regrowth occurs in each iteration.
+- In oneshot regrowth, you can use `--regrow_step` to set how much sparsity you need for regrowth.
 
 
 Core ideas:
