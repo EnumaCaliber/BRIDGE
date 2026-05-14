@@ -85,7 +85,7 @@ Key args (from `main.py`):
 
 ### 2) Regrowth methods
 
-#### A. Reference-based regrowth (SSIM + reference masks)
+#### regrowth
 - Implemented in `regrowth_iterative.py` for iterative regrowth and `regrowth_oneshot.py` for oneshot regrowth
 - There is some difference in iterative regrowth and one-shot regrowth
 - In iterative regrowth, you can use `--budget_space_size`,` --min_budget_frac`, and `--max_budget_frac` to define how much sparsity regrowth occurs in each iteration.
@@ -103,9 +103,6 @@ Core ideas:
 2. **Allocation**: an LSTM controller samples an allocation ratio per target layer.
 3. **Selection**: within each layer, select weights to regrow using **reference masks/weights** (e.g., from 0.95 sparse checkpoint).
 4. **(Mini)Finetune** to evaluate reward.
-
-#### B. Saliency-based regrowth
-Implemented in `rl_saliency_regrowth.py`.
 
 Core ideas:
 1. RL controller allocates the regrowth budget across layers.
