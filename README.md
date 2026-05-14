@@ -85,7 +85,6 @@ Key args (from `main.py`):
 
 ### 2) Regrowth methods
 
-#### regrowth
 - Implemented in `regrowth_iterative.py` for iterative regrowth and `regrowth_oneshot.py` for oneshot regrowth
 - There is some difference in iterative regrowth and one-shot regrowth
 - In iterative regrowth, you can use `--budget_space_size`,` --min_budget_frac`, and `--max_budget_frac` to define how much sparsity regrowth occurs in each iteration.
