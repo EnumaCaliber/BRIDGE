@@ -113,7 +113,7 @@ This is a Fisher/Hessian-diagonal approximation plus magnitude scaling.
 
 ### 3) Growth metrics (what to report)
 
-This repo contains several “metrics” used to analyze regrowth decisions and results.
+This repo contains several “metrics” used to analyze regrowth and results.
 
 #### A. Sparsity and regrowth budget
 
@@ -150,10 +150,7 @@ Interpretation:
 - accuracy improvement when regrowing only that layer
 
 #### D. Saliency-based importance
-Two code paths exist:
-
-1. `rl_saliency_regrowth.py` uses `SaliencyComputer` (RigL-style accumulated gradients) with FairPrune formula.
-2. `utils/saliency_analysis.py` provides a more general “per-class” saliency analyzer:
+1. `utils/saliency_analysis.py` provides a more general “per-class” saliency analyzer:
    - supports second-order approximation (`use_second_order=True`)
    - can compute per-class importance tensors and visualize distributions
 
@@ -162,17 +159,6 @@ Interpretation:
 - regrow highest-saliency weights among currently pruned positions (RigL-inspired)
 
 ---
-
-### 4) Benchmark: timing comparison of regrowth methods
-
-Use the benchmark to compare the major components:
-- preprocessing
-  - reference method: SSIM feature extraction + SSIM scores
-  - saliency method: gradient accumulation
-- selection
-- mask update
-- mini-finetuning
-
 #### Quick (single episode)
 ```bash
 python quick_benchmark.py --m_name resnet20
