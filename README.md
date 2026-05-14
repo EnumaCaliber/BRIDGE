@@ -90,6 +90,7 @@ Key args (from `main.py`):
 - There is some difference in iterative regrowth and one-shot regrowth
 - In iterative regrowth, you can use `--budget_space_size`,` --min_budget_frac`, and `--max_budget_frac` to define how much sparsity regrowth occurs in each iteration.
 - In oneshot regrowth, you can use `--regrow_step` to set how much sparsity you need for regrowth.
+- In both oneshot regrowth and iterative regrowth, you can use `--ssim_threshold` to set the threshold for SSIM. If ssim_threshold = 0.1, the process will choose the layer for which SSIM <= 0.1 for search.
 
 
 Core ideas:
