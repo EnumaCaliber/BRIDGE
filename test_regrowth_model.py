@@ -4,8 +4,8 @@ import argparse
 from pathlib import Path
 import numpy as np
 import random
-from utils.model_loader import model_loader
-from utils.data_loader import data_loader
+from models.model_loader import model_loader
+from data.data_loader import data_loader
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--m_name', type=str, default='effnet')
@@ -14,6 +14,12 @@ parser.add_argument('--model_path', type=str, default='./rl_saliency_checkpoints
 # parser.add_argument('--model_path', type=str, default='./vgg16/ckpt_after_prune_oneshot/pruned_oneshot_mask_0.99.pth')
 parser.add_argument('--seed', type=int, default=42, help='random seed for reproducibility')
 parser.add_argument('--data_dir', type=str, default='./data')
+# data_loader
+parser.add_argument('--batch_size', type=int, default=128)
+parser.add_argument('--val_split',  type=float, default=0.1)
+parser.add_argument('--num_workers',type=int, default=15)
+parser.add_argument('--data_dir',   type=str, default='./data')
+
 args = parser.parse_args()
 
 torch.manual_seed(args.seed)
@@ -89,7 +95,13 @@ def evaluate(model, loader, device):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-_, _, test_loader = data_loader(data_dir=args.data_dir)
+train_loader, val_loader, test_loader = data_loader(
+    data_dir=args.data_dir,
+    val_split=args.val_split,
+    batch_size=args.batch_size,
+    num_workers=args.num_workers,
+    dataset= args.dataset,
+)
 
 ckpt_path = Path(args.model_path)
 model, sd = load_model(ckpt_path, args.m_name, device)
