@@ -114,10 +114,11 @@ This is a Fisher/Hessian-diagonal approximation plus magnitude scaling.
 ### 3) Growth metrics (what to report)
 
 This repo contains several “metrics” used to analyze regrowth and results.
+#### A. Final regrowth model sparsity and accuracy test
+- Use `test_unstructure_regrowth_model.py` to test the final regrowth model sparsity and accuracy
+#### B. Sparsity and regrowth budget
 
-#### A. Sparsity and regrowth budget
-
-`utils/analysis_utils.py` exposes `count_pruned_params(model)` which reports:
+`utils/analysis_tools.py` exposes `count_pruned_params(model)` which reports:
 - total parameters in prunable layers
 - surviving (unmasked) parameters
 - pruned parameters
@@ -128,27 +129,27 @@ Common derived metrics:
   $$K = (s_{\text{start}} - s_{\text{target}})\cdot N_{\text{total}}$$
 
 
-#### B. Layer capacity
+#### C. Layer capacity
 When regrowing, each layer has a **capacity**:
 
 - capacity(layer) = number of currently pruned weights = `sum(weight_mask == 0)`
 
 This bounds how many weights you can regrow in that layer.
 
-#### C. SSIM-based “growth metric” / priority
+#### D. SSIM-based “growth metric” / priority
 In the reference-based RL approach, each layer gets an SSIM score computed from features.
 
-- Feature extraction: `BlockwiseFeatureExtractor` (in `utils/analysis_utils.py`)
+- Feature extraction: `BlockwiseFeatureExtractor` (in `utils/analysis_tools.py`)
 - Similarity: `compute_block_ssim(features_pretrained, features_pruned)`
 
 Interpretation:
 - **Lower SSIM** ⇒ larger feature drift from baseline ⇒ layer is more damaged by pruning ⇒ regrowing there is more likely to help.
 
-`single_layer_regrowth_analysis.py` is designed to measure correlation between:
+`single_layer_regrowth_analysis.py` is designed to measure the correlation between:
 - SSIM(layer)
 - accuracy improvement when regrowing only that layer
 
-#### D. Saliency-based importance
+#### E. Saliency-based importance
 1. `utils/saliency_analysis.py` provides a more general “per-class” saliency analyzer:
    - supports second-order approximation (`use_second_order=True`)
    - can compute per-class importance tensors and visualize distributions
