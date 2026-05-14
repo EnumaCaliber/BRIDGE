@@ -127,7 +127,6 @@ Common derived metrics:
 - **Regrowth budget** (global):
   $$K = (s_{\text{start}} - s_{\text{target}})\cdot N_{\text{total}}$$
 
-(In `single_layer_regrowth_analysis.py` this is described as “global budget”.)
 
 #### B. Layer capacity
 When regrowing, each layer has a **capacity**:
