@@ -115,7 +115,7 @@ def prune_one_step(model, ratio, example_inputs, pruner_name,
     )
     pruner.step()
 
-    # 剪后匹配存活通道，更新 index_map
+    # index_map
     for name, m in model.named_modules():
         if not isinstance(m, nn.Conv2d):
             continue
@@ -128,14 +128,14 @@ def prune_one_step(model, ratio, example_inputs, pruner_name,
         if old_w.shape[0] == new_w.shape[0]:
             continue  # 该层没被剪
 
-        # 找存活的 current index
+        #  current index
         min_in = min(old_w.shape[1], new_w.shape[1])
         survived_current = []
         for new_ch in new_w:
             diffs = (old_w[:, :min_in] - new_ch[:min_in].unsqueeze(0)).abs().sum(dim=(1, 2, 3))
             survived_current.append(diffs.argmin().item())
 
-        # 更新 index_map：存活通道对应的 dense index
+        # index_map：dense index
         index_map[name] = [index_map[name][i] for i in survived_current]
 
         pruned_dense_idx = sorted(
@@ -168,7 +168,7 @@ for name, m in net.named_modules():
         index_map[name] = list(range(m.out_channels))
 
 # -------------------------------------------------------
-# 迭代剪枝
+# iterative prune
 # -------------------------------------------------------
 for step in range(args.iterative_steps):
     print(f"\n{'=' * 50}")

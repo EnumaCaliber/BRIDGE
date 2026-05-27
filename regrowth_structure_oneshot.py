@@ -1,7 +1,7 @@
 """
 Structured RL-based One-Shot Regrowth
 ======================================
-Weight transfer fix: match_to_dense 找通道对应关系，按对应关系复制权重。
+DependencyGraph 기반 채널 복원 (index_map / pruned_dense_map 활용)
 """
 
 import torch
@@ -36,41 +36,11 @@ def set_seed(seed=42):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Taylor Importance
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class PrecomputedTaylorImportance(tp.importance.Importance):
-    def __init__(self, channel_scores, id_to_name):
-        self.channel_scores = channel_scores
-        self.id_to_name     = id_to_name
-
-    def __call__(self, group, **kwargs):
-        for dep, _ in group:
-            m    = dep.target.module
-            name = self.id_to_name.get(id(m))
-            if isinstance(m, nn.Conv2d) and name and name in self.channel_scores:
-                scores = self.channel_scores[name]
-                return torch.tensor(
-                    [scores.get(i, 0.0) for i in range(m.out_channels)],
-                    dtype=torch.float)
-        for dep, _ in group:
-            m = dep.target.module
-            if isinstance(m, nn.Conv2d):
-                return m.weight.detach().abs().sum(dim=[1, 2, 3])
-        return torch.ones(1)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # Structured Pruning Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def get_original_channels(dense_model):
     return {n: m.out_channels for n, m in dense_model.named_modules()
-            if isinstance(m, nn.Conv2d)}
-
-
-def get_current_config(model):
-    return {n: m.out_channels for n, m in model.named_modules()
             if isinstance(m, nn.Conv2d)}
 
 
@@ -83,149 +53,102 @@ def compute_channel_sparsity(model, original_channels):
     return (1 - remaining / total) if total > 0 else 0.0
 
 
-def get_target_layers(dense_model, pruned_model):
-    d_mods = dict(dense_model.named_modules())
-    return [name for name, p_m in pruned_model.named_modules()
-            if isinstance(p_m, nn.Conv2d)
-            and name in d_mods
-            and p_m.out_channels < d_mods[name].out_channels]
+def get_target_layers(pruned_dense_map):
+    """pruned_dense_map에 비어있지 않은 층 = 아직 복원 가능한 층"""
+    return [name for name, pruned_list in pruned_dense_map.items()
+            if len(pruned_list) > 0]
 
 
-def get_layer_capacities(dense_model, pruned_model, target_layers):
-    d_mods = dict(dense_model.named_modules())
-    p_mods = dict(pruned_model.named_modules())
-    caps = []
-    for name in target_layers:
-        d_m, p_m = d_mods.get(name), p_mods.get(name)
-        caps.append(max(d_m.out_channels - p_m.out_channels, 0)
-                    if d_m and p_m else 0)
-    return caps
+def get_layer_capacities(pruned_dense_map, target_layers):
+    """각 층에서 복원 가능한 채널 수 = pruned_dense_map 길이"""
+    return [len(pruned_dense_map[name]) for name in target_layers]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Channel Matching
+# DependencyGraph 기반 채널 복원
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def match_to_dense(model, dense_model, layer_name):
+def regrow_channels_dg(model, example_inputs, allocation_dense_idx, index_map, device):
+    """
+    allocation_dense_idx : {layer_name: [dense_idx, ...]}
+        - 이번 episode에서 복원할 층별 dense index 목록
+    index_map : {layer_name: [survived_dense_idx, ...]}
+        - 이 에피소드 전용 복사본을 받아 in-place 업데이트
 
-    d_m = dict(dense_model.named_modules())[layer_name]
-    m_m = dict(model.named_modules()).get(layer_name)
-    if m_m is None:
-        return {}
-    d_w    = d_m.weight.data.cpu()
-    m_w    = m_m.weight.data.cpu()
-    min_in = min(d_w.shape[1], m_w.shape[1])
-    mapping = {}
-    for m_idx in range(m_w.shape[0]):
-        diffs = (d_w[:, :min_in] - m_w[m_idx, :min_in].unsqueeze(0)).abs().sum(dim=[1, 2, 3])
-        mapping[m_idx] = int(diffs.argmin().item())
-    return mapping
+    Returns: 채널이 복원된 새 모델 (in-place 수정 후 반환)
+    """
+    named_modules = dict(model.named_modules())
 
+    for target_name, dense_indices in allocation_dense_idx.items():
+        if not dense_indices:
+            continue
 
-def build_pruned_to_dense(pruned_model, dense_model, target_layers):
+        # 过滤掉已经在 index_map 里的（前一层 DG 连带涨进来的）
+        already_survived = set(index_map.get(target_name, []))
+        dense_indices = [idx for idx in dense_indices if idx not in already_survived]
+        if not dense_indices:
+            print(f"  [DG] {target_name} 全部已存在，跳过")
+            continue
 
-    print("Building pruned↔dense channel mapping…")
-    result = {}
-    for lname in target_layers:
-        result[lname] = match_to_dense(pruned_model, dense_model, lname)
-        kept = set(result[lname].values())
-        pruned_set = set(range(dict(dense_model.named_modules())[lname].out_channels)) - kept
-        print(f"  {lname}: {len(pruned_set)} pruned channels")
-    return result
+        target_conv = named_modules.get(target_name)
+        if target_conv is None:
+            print(f"  [DG] {target_name} not found, skip")
+            continue
 
+        num_grow = len(dense_indices)
 
-def apply_config_with_matched_transfer(pruned_model, dense_model,
-                                       new_config, original_channels,
-                                       example_inputs, channel_scores,
-                                       pruned_to_dense, target_layers):
-
-    model = copy.deepcopy(dense_model)
-    pruning_ratio_dict = {}
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Conv2d) and name in new_config:
-            sp = 1 - new_config[name] / original_channels[name]
-            if sp > 0:
-                pruning_ratio_dict[module] = sp
-
-    if pruning_ratio_dict:
-        id_to_name = {id(m): n for n, m in model.named_modules()}
-        pruner = tp.pruner.MagnitudePruner(
-            model, example_inputs,
-            importance=PrecomputedTaylorImportance(channel_scores, id_to_name),
-            iterative_steps=1, pruning_ratio=0,
-            pruning_ratio_dict=pruning_ratio_dict,
+        # DG는 모델 구조가 바뀔 때마다 재빌드
+        DG = tp.DependencyGraph().build_dependency(model, example_inputs)
+        group = DG.get_pruning_group(
+            target_conv, tp.prune_conv_out_channels, idxs=[0]
         )
-        pruner.step()
 
+        for dep, _ in group:
+            layer   = dep.target.module
+            handler = dep.handler
+            name    = dep.target.name
 
-    new_to_dense = {lname: match_to_dense(model, dense_model, lname)
-                    for lname in target_layers}
+            if isinstance(layer, nn.Conv2d) and handler == tp.prune_conv_out_channels:
+                old_w = layer.weight.data
+                new_w = torch.zeros(num_grow, old_w.shape[1],
+                                    *old_w.shape[2:], device=device)
+                layer.weight = nn.Parameter(torch.cat([old_w, new_w], dim=0))
+                if layer.bias is not None:
+                    layer.bias = nn.Parameter(
+                        torch.cat([layer.bias.data,
+                                   torch.zeros(num_grow, device=device)]))
+                layer.out_channels += num_grow
+                print(f"    ✓ conv out [{name}]: "
+                      f"{old_w.shape[0]} → {layer.out_channels}")
 
+            elif isinstance(layer, nn.Conv2d) and handler == tp.prune_conv_in_channels:
+                old_w = layer.weight.data
+                new_w = torch.zeros(old_w.shape[0], num_grow,
+                                    *old_w.shape[2:], device=device)
+                layer.weight = nn.Parameter(torch.cat([old_w, new_w], dim=1))
+                layer.in_channels += num_grow
+                print(f"    ✓ conv in  [{name}]: "
+                      f"{old_w.shape[1]} → {layer.in_channels}")
 
-    dense_to_pruned = {
-        lname: {d: p for p, d in pruned_to_dense[lname].items()}
-        for lname in target_layers
-    }
+            elif isinstance(layer, nn.BatchNorm2d):
+                old_ch = layer.num_features
+                for attr, fill in [('weight', 1.0), ('bias', 0.0)]:
+                    old = getattr(layer, attr).data
+                    setattr(layer, attr, nn.Parameter(
+                        torch.cat([old, torch.full((num_grow,), fill, device=device)])))
+                for attr, fill in [('running_mean', 0.0), ('running_var', 1.0)]:
+                    old = getattr(layer, attr)
+                    setattr(layer, attr,
+                            torch.cat([old, torch.full((num_grow,), fill, device=device)]))
+                layer.num_features += num_grow
+                print(f"    ✓ bn       [{name}]: {old_ch} → {layer.num_features}")
 
-    p_mods = dict(pruned_model.named_modules())
-    with torch.no_grad():
+        # index_map 업데이트: 복원된 dense index를 survived 목록에 추가
+        index_map[target_name] = sorted(
+            index_map[target_name] + list(dense_indices))
 
-        for lname in target_layers:
-            n_m = dict(model.named_modules()).get(lname)
-            p_m = p_mods.get(lname)
-            if n_m is None or p_m is None:
-                continue
-            d2p    = dense_to_pruned[lname]
-            n2d    = new_to_dense[lname]
-            min_in = min(n_m.weight.shape[1], p_m.weight.shape[1])
-            for n_idx, d_idx in n2d.items():
-                if d_idx in d2p:
-                    p_idx = d2p[d_idx]
-                    n_m.weight.data[n_idx, :min_in] = p_m.weight.data[p_idx, :min_in]
-                    if n_m.bias is not None and p_m.bias is not None:
-                        n_m.bias.data[n_idx] = p_m.bias.data[p_idx]
-
-
-
-        for name, n_m in model.named_modules():
-            if not isinstance(n_m, nn.Conv2d) or name in target_layers:
-                continue
-            p_m = p_mods.get(name)
-            if p_m is None:
-                continue
-            n_out = min(n_m.weight.shape[0], p_m.weight.shape[0])
-            n_in  = min(n_m.weight.shape[1], p_m.weight.shape[1])
-            n_m.weight.data[:n_out, :n_in] = p_m.weight.data[:n_out, :n_in]
-            if n_m.bias is not None and p_m.bias is not None:
-                n_m.bias.data[:n_out] = p_m.bias.data[:n_out]
-
-        # BN
-        for lname, n_m in model.named_modules():
-            if not isinstance(n_m, nn.BatchNorm2d):
-                continue
-            p_m = p_mods.get(lname)
-            if p_m is None:
-                continue
-            if lname in new_to_dense:
-                n2d = new_to_dense[lname]
-                d2p = dense_to_pruned.get(lname, {})
-                for n_idx, d_idx in n2d.items():
-                    if n_idx >= n_m.num_features:
-                        continue
-                    if d_idx in d2p:
-                        p_idx = d2p[d_idx]
-                        if p_idx >= p_m.num_features:
-                            continue
-                        n_m.weight.data[n_idx]       = p_m.weight.data[p_idx]
-                        n_m.bias.data[n_idx]         = p_m.bias.data[p_idx]
-                        n_m.running_mean.data[n_idx] = p_m.running_mean.data[p_idx]
-                        n_m.running_var.data[n_idx]  = p_m.running_var.data[p_idx]
-            else:
-                n = min(n_m.num_features, p_m.num_features)
-                n_m.weight.data[:n]       = p_m.weight.data[:n]
-                n_m.bias.data[:n]         = p_m.bias.data[:n]
-                n_m.running_mean.data[:n] = p_m.running_mean.data[:n]
-                n_m.running_var.data[:n]  = p_m.running_var.data[:n]
+        # 다음 층 처리를 위해 named_modules 갱신
+        named_modules = dict(model.named_modules())
 
     return model
 
@@ -306,11 +229,13 @@ class TaylorChannelScorer:
         return channel_scores
 
 
-def select_channels_by_taylor(channel_scores, pruned_to_dense, layer_name, n_restore):
-
+def select_channels_by_taylor(channel_scores, pruned_dense_map, layer_name, n_restore):
+    """
+    pruned_dense_map[layer_name] : 이 층에서 아직 복원 안 된 dense index 목록
+    → Taylor 점수 기준 상위 n_restore개 반환
+    """
     scores     = channel_scores.get(layer_name, {})
-    kept_dense = set(pruned_to_dense.get(layer_name, {}).values())
-    pruned_set = set(scores.keys()) - kept_dense
+    pruned_set = set(pruned_dense_map.get(layer_name, []))
     if not pruned_set or n_restore == 0:
         return []
     ranked = sorted(pruned_set, key=lambda c: scores.get(c, 0.0), reverse=True)
@@ -356,7 +281,7 @@ class RegrowthAgent(nn.Module):
 class OneshotStructuredRegrowthPG:
 
     def __init__(self, config, model_sparse, dense_model,
-                 channel_scores, pruned_to_dense,
+                 channel_scores, index_map, pruned_dense_map,  # ← 변경
                  original_channels, example_inputs,
                  target_layers, train_loader, test_loader,
                  device, wandb_run=None):
@@ -382,10 +307,10 @@ class OneshotStructuredRegrowthPG:
         self.train_loader      = train_loader
         self.test_loader       = test_loader
         self.channel_scores    = channel_scores
-        self.pruned_to_dense   = pruned_to_dense
+        self.index_map         = index_map          # ← 추가
+        self.pruned_dense_map  = pruned_dense_map   # ← 추가 (dense idx 기준 pruned 목록)
         self.original_channels = original_channels
         self.example_inputs    = example_inputs
-        self.pruned_config     = get_current_config(model_sparse)
 
         self.layer_capacities = config['layer_capacities']
         self.total_capacity   = max(sum(self.layer_capacities), 1)
@@ -396,8 +321,9 @@ class OneshotStructuredRegrowthPG:
         self.reward_window_size   = config.get('reward_window_size', 20)
         self.finetune_epochs      = config.get('finetune_epochs', 5)
 
-        self._best_model_state = None
-        self._best_reward_seen = float('-inf')
+        self._best_model_state  = None
+        self._best_reward_seen  = float('-inf')
+        self._best_index_map    = None  # ← 최적 index_map 저장
 
         self.run            = wandb_run
         self.model_name     = config.get('model_name')
@@ -432,7 +358,8 @@ class OneshotStructuredRegrowthPG:
         print(f"  Budget bonus  : {self.budget_bonus}")
         print(f"  Layers ({len(target_layers)}):")
         for n, i in self.layer_priority:
-            print(f"    {n}: cap={self.layer_capacities[i]}")
+            print(f"    {n}: cap={self.layer_capacities[i]} "
+                  f"pruned={len(self.pruned_dense_map.get(n, []))}")
 
     def get_entropy_coef(self, epoch):
         if not self.use_entropy_schedule:
@@ -542,7 +469,7 @@ class OneshotStructuredRegrowthPG:
         prev_logits       = torch.zeros(1, self.BUDGET_SPACE, device=self.DEVICE)
         all_log_probs, budget_masked_logits, alloc_masked_logits = [], [], []
 
-        # Budget
+        # ── Budget 결정
         b_ctx    = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float,
                                 device=self.DEVICE).unsqueeze(0)
         b_logits = self.agent(prev_logits, b_ctx, step='budget').squeeze(0)
@@ -555,7 +482,7 @@ class OneshotStructuredRegrowthPG:
         prev_logits = b_logits.unsqueeze(0)
         print(f"  [Budget] {target_ch} channels to restore")
 
-        # Allocation
+        # ── Allocation 결정 (층별 채널 수)
         ratio_opts = (torch.arange(self.ALLOC_SPACE, device=self.DEVICE, dtype=torch.float)
                       / (self.ALLOC_SPACE - 1))
         remaining  = target_ch
@@ -591,36 +518,33 @@ class OneshotStructuredRegrowthPG:
         ep_budget_logits = torch.stack(budget_masked_logits)
         ep_alloc_logits  = torch.stack(alloc_masked_logits)
 
-        allocation      = {n: int(c) for n, c in zip(pnames, sel_counts) if c > 0}
-        actual_restored = sum(sel_counts)
-        usage_ratio     = actual_restored / max(target_ch, 1)
-        print(f"  [Alloc] {actual_restored}/{target_ch} | {allocation}")
-
-
-        new_config = dict(self.pruned_config)
-        for lname, n_add in allocation.items():
+        # ── Taylor 점수로 구체적 dense index 선택
+        allocation_dense_idx = {}   # {layer_name: [dense_idx, ...]}
+        actual_restored = 0
+        for lname, n_add in zip(pnames, sel_counts):
+            if n_add == 0:
+                continue
             chs = select_channels_by_taylor(
-                self.channel_scores, self.pruned_to_dense, lname, n_add)
+                self.channel_scores, self.pruned_dense_map, lname, n_add)
             if chs:
-                new_config[lname] = min(
-                    self.pruned_config[lname] + len(chs),
-                    self.original_channels.get(lname, self.pruned_config[lname])
-                )
+                allocation_dense_idx[lname] = chs
+                actual_restored += len(chs)
                 print(f"    {lname}: +{len(chs)} ch (top3: {chs[:3]})")
 
+        usage_ratio = actual_restored / max(target_ch, 1)
+        print(f"  [Alloc] {actual_restored}/{target_ch}  | {list(allocation_dense_idx.keys())}")
 
-        new_model = apply_config_with_matched_transfer(
-            pruned_model=self.model_sparse,
-            dense_model=self.dense_model,
-            new_config=new_config,
-            original_channels=self.original_channels,
+        # ── DependencyGraph로 채널 복원
+        ep_index_map = copy.deepcopy(self.index_map)  # episode 전용 index_map
+        new_model = regrow_channels_dg(
+            model=copy.deepcopy(self.model_sparse),
             example_inputs=self.example_inputs,
-            channel_scores=self.channel_scores,
-            pruned_to_dense=self.pruned_to_dense,
-            target_layers=self.target_layers,
-        ).to(self.DEVICE)
+            allocation_dense_idx=allocation_dense_idx,
+            index_map=ep_index_map,
+            device=self.DEVICE,
+        )
 
-        pre_ft_model = copy.deepcopy(new_model)  # 涨了但未 finetune 的模型
+        pre_ft_model  = copy.deepcopy(new_model)
         self.mini_finetune(new_model, epochs=self.finetune_epochs)
 
         accuracy = self.evaluate_model(new_model, full_eval=True)
@@ -637,7 +561,8 @@ class OneshotStructuredRegrowthPG:
         if reward > self._best_reward_seen:
             self._best_reward_seen = reward
             self._best_model_state = copy.deepcopy(pre_ft_model.state_dict())
-            self._save_best(epoch, reward, accuracy, pre_ft_model)
+            self._best_index_map   = copy.deepcopy(ep_index_map)  # ← 최적 index_map 보존
+            self._save_best(epoch, reward, accuracy, pre_ft_model, ep_index_map)
 
         if self.reward_baseline is None:
             self.reward_baseline = reward
@@ -652,15 +577,20 @@ class OneshotStructuredRegrowthPG:
 
         return ep_wlp, ep_budget_logits, ep_alloc_logits, reward, sparsity, target_ch
 
-    def _save_best(self, epoch, reward, accuracy, model):
+    def _save_best(self, epoch, reward, accuracy, model, index_map):
         p = os.path.join(self._save_dir(), f'best_ep{epoch + 1}_rwd{reward:+.4f}.pth')
         model_to_save = copy.deepcopy(model)
         for m in model_to_save.modules():
             m._forward_hooks.clear()
             m._backward_hooks.clear()
             m._forward_pre_hooks.clear()
-        torch.save(model_to_save, p)
-        print(f"  ✓ Best (pre-finetune): reward={reward:+.4f}  mini_ft_acc={accuracy:.2f}% → {p}")
+        # index_map도 함께 저장 (나중에 추가 regrow 또는 분석에 사용)
+        torch.save({
+            'model': model_to_save,
+            'index_map': index_map,
+        }, p)
+        print(f"  ✓ Best (pre-finetune): reward={reward:+.4f}  "
+              f"mini_ft_acc={accuracy:.2f}% → {p}")
         if self.run:
             self.run.log({"best_reward": reward, "best_mini_ft_acc": accuracy,
                           "best_epoch": epoch + 1})
@@ -691,7 +621,8 @@ def main():
     parser.add_argument('--m_name',         type=str,   default='effnet')
     parser.add_argument('--data_dir',       type=str,   default='./data')
     parser.add_argument('--method',         type=str,   default='structured_oneshot')
-    parser.add_argument('--pruned_ckpt',    type=str,   default="effnet/ckpt_after_prune_structured_oneshot/pruned_structured_l1_sp0.9_it1.pth")
+    parser.add_argument('--pruned_ckpt',    type=str,
+                        default="effnet/ckpt_after_prune_structured_oneshot/pruned_structured_l1_sp0.9_it1.pth")
     parser.add_argument('--acc_threshold',  type=float, default=50.0)
     parser.add_argument('--sparsity_delta', type=float, default=0.04)
     parser.add_argument('--budget_bonus',   type=float, default=0.02)
@@ -733,45 +664,77 @@ def main():
     )
     example_inputs = next(iter(train_loader))[0][:1].to(device)
 
+    # ── Dense 모델 로드
     dense_model = model_loader(args.m_name, device)
     load_model_name(dense_model, f'./{args.m_name}/checkpoint', args.m_name)
     dense_model.eval()
     original_channels = get_original_channels(dense_model)
 
-    pruned_model = torch.load(args.pruned_ckpt, map_location=device, weights_only=False)
+    # ── 剪枝 체크포인트 로드 (index_map / pruned_dense_map 포함)
+    ckpt = torch.load(args.pruned_ckpt, map_location=device, weights_only=False)
+    if isinstance(ckpt, dict) and 'model' in ckpt:
+        pruned_model    = ckpt['model'].to(device)
+        index_map       = ckpt['index_map']        # {layer: [survived_dense_idx]}
+        pruned_dense_map = ckpt['pruned_dense_map'] # {layer: [pruned_dense_idx]}
+    else:
+        # 구형 포맷 호환 (모델만 저장된 경우)
+        pruned_model     = ckpt.to(device) if not isinstance(ckpt, dict) else ckpt
+        index_map        = {}
+        pruned_dense_map = {}
+        print("[Warning] index_map / pruned_dense_map not found in checkpoint!")
     pruned_model.eval()
 
     sp0  = compute_channel_sparsity(pruned_model, original_channels)
     acc0 = quick_eval(pruned_model, test_loader, device)
     print(f"\nStarting → Acc={acc0:.2f}%  Sparsity={sp0:.4f}")
 
-    target_layers    = get_target_layers(dense_model, pruned_model)
-    layer_capacities = get_layer_capacities(dense_model, pruned_model, target_layers)
-    total_original_ch = sum(original_channels.values())
-    target_restore_ch = min(int(total_original_ch * args.sparsity_delta),
-                            sum(layer_capacities))
-    print(f"\n{len(target_layers)} pruned layers  "
-          f"target_restore={target_restore_ch} ch  (delta={args.sparsity_delta:.4f})")
+    # ── 复原可能的层（pruned_dense_map 基准）
+    target_layers    = get_target_layers(pruned_dense_map)
+    layer_capacities = get_layer_capacities(pruned_dense_map, target_layers)
 
     if sum(layer_capacities) == 0:
         print("No channels to restore. Exiting.")
         return
 
+    total_original_ch = sum(original_channels.values())
+    want_ch           = int(total_original_ch * args.sparsity_delta)
+    print(f"\n{len(target_layers)} pruned layers  "
+          f"want_restore={want_ch} ch  (delta={args.sparsity_delta:.4f})")
+
+    # ── SSIM으로 손상 큰 층만 검색 공간으로 좁힘
     selected_layers, ssim_scores = SSIMLayerSelector.update_search_space(
         sparse_model=pruned_model, pretrained_model=dense_model,
         data_loader_ref=test_loader, target_layers=target_layers,
         threshold=args.ssim_threshold, num_batches=args.ssim_num_batches,
     )
+    layer_capacities = get_layer_capacities(pruned_dense_map, selected_layers)
 
+    # ── selected_layers 容量不足时，按 SSIM 分数从低到高逐层补入
+    if sum(layer_capacities) < want_ch:
+        print(f"  [Warning] selected_layers 容量 {sum(layer_capacities)} < 目标 {want_ch}，按 SSIM 补层...")
+        remaining_layers = sorted(
+            [l for l in target_layers if l not in selected_layers],
+            key=lambda l: ssim_scores.get(l, 1.0)
+        )
+        for l in remaining_layers:
+            selected_layers.append(l)
+            layer_capacities = get_layer_capacities(pruned_dense_map, selected_layers)
+            print(f"    补入 {l} (SSIM={ssim_scores.get(l, 1.0):.4f})，当前容量={sum(layer_capacities)}")
+            if sum(layer_capacities) >= want_ch:
+                break
+
+    target_restore_ch = min(want_ch, sum(layer_capacities))
+    print(f"  最终 selected_layers={len(selected_layers)} 层  "
+          f"target_restore_ch={target_restore_ch}")
+
+    # ── Taylor 중요도 계산
     print("Computing Taylor scores…")
     channel_scores = TaylorChannelScorer(dense_model=dense_model, device=device).compute(
         sparse_model=pruned_model, target_layers=selected_layers,
         data_loader=train_loader, n_batches=args.taylor_batches,
     )
 
-
-    pruned_to_dense  = build_pruned_to_dense(pruned_model, dense_model, selected_layers)
-    layer_capacities = get_layer_capacities(dense_model, pruned_model, selected_layers)
+    layer_capacities = get_layer_capacities(pruned_dense_map, selected_layers)
 
     if not args.no_wandb:
         run = wandb.init(
@@ -809,14 +772,20 @@ def main():
 
     pg = OneshotStructuredRegrowthPG(
         config=config, model_sparse=pruned_model, dense_model=dense_model,
-        channel_scores=channel_scores, pruned_to_dense=pruned_to_dense,
-        original_channels=original_channels, example_inputs=example_inputs,
-        target_layers=selected_layers, train_loader=train_loader,
-        test_loader=test_loader, device=device, wandb_run=run,
+        channel_scores=channel_scores,
+        index_map=index_map,               # ← 변경
+        pruned_dense_map=pruned_dense_map,  # ← 변경
+        original_channels=original_channels,
+        example_inputs=example_inputs,
+        target_layers=selected_layers,
+        train_loader=train_loader,
+        test_loader=test_loader,
+        device=device, wandb_run=run,
     )
 
     pg.solve_environment()
 
+    # ── 최종 모델 복원
     if pg._best_model_state is not None:
         best_model = copy.deepcopy(pruned_model)
         best_model.load_state_dict(pg._best_model_state)
