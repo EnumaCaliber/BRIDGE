@@ -14,8 +14,8 @@ parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Structured Iterati
 parser.add_argument('--m_name', type=str, default="resnet20")
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--pruner', type=str, default='l1', choices=['l1', 'lamp', 'taylor'])
-parser.add_argument('--ratio_per_step', type=float, default=0.1, help='每步相对当前模型剪掉的通道比例')
-parser.add_argument('--iterative_steps', type=int, default=25)
+parser.add_argument('--ratio_per_step', type=float, default=0.3)
+parser.add_argument('--iterative_steps', type=int, default=10)
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--val_split', type=float, default=0.1)
 parser.add_argument('--num_workers', type=int, default=15)
@@ -60,6 +60,9 @@ for name, m in net.named_modules():
         original_channels[name] = m.out_channels
 
 
+# -------------------------------------------------------
+# functions
+# -------------------------------------------------------
 def get_importance(pruner_name, model, train_loader, device):
     if pruner_name == 'l1':
         return tp.importance.MagnitudeImportance(p=1)
@@ -77,20 +80,6 @@ def get_importance(pruner_name, model, train_loader, device):
         return importance
 
 
-def prune_one_step(model, ratio, example_inputs, pruner_name, train_loader, device):
-    """每步在当前模型上剪 ratio 比例，重建 pruner 避免内置调度"""
-    ignored = [m for m in model.modules() if isinstance(m, nn.Linear)]
-    importance = get_importance(pruner_name, model, train_loader, device)
-    pruner = tp.pruner.MagnitudePruner(
-        model, example_inputs,
-        importance=importance,
-        iterative_steps=1,       # 只走一步，不用内置调度
-        ch_sparsity=ratio,       # 相对当前模型的比例
-        ignored_layers=ignored,
-    )
-    pruner.step()
-
-
 def compute_channel_sparsity(model):
     total, remaining = 0, 0
     for name, m in model.named_modules():
@@ -105,6 +94,60 @@ def get_flops_params(model):
     return macs, params
 
 
+def prune_one_step(model, ratio, example_inputs, pruner_name,
+                   train_loader, device, index_map):
+
+
+    pre_weights = {}
+    for name, m in model.named_modules():
+        if isinstance(m, nn.Conv2d):
+            pre_weights[name] = m.weight.data.clone()
+
+    # 剪枝
+    ignored = [m for m in model.modules() if isinstance(m, nn.Linear)]
+    importance = get_importance(pruner_name, model, train_loader, device)
+    pruner = tp.pruner.MagnitudePruner(
+        model, example_inputs,
+        importance=importance,
+        iterative_steps=1,
+        pruning_ratio=ratio,
+        ignored_layers=ignored,
+    )
+    pruner.step()
+
+    # 剪后匹配存活通道，更新 index_map
+    for name, m in model.named_modules():
+        if not isinstance(m, nn.Conv2d):
+            continue
+        if name not in pre_weights:
+            continue
+
+        old_w = pre_weights[name]
+        new_w = m.weight.data
+
+        if old_w.shape[0] == new_w.shape[0]:
+            continue  # 该层没被剪
+
+        # 找存活的 current index
+        min_in = min(old_w.shape[1], new_w.shape[1])
+        survived_current = []
+        for new_ch in new_w:
+            diffs = (old_w[:, :min_in] - new_ch[:min_in].unsqueeze(0)).abs().sum(dim=(1, 2, 3))
+            survived_current.append(diffs.argmin().item())
+
+        # 更新 index_map：存活通道对应的 dense index
+        index_map[name] = [index_map[name][i] for i in survived_current]
+
+        pruned_dense_idx = sorted(
+            set(range(original_channels[name])) - set(index_map[name])
+        )
+        print(f"  [{name}] pruned dense indices: {pruned_dense_idx}")
+        print(f"  [{name}] survived dense indices: {index_map[name]}")
+
+
+# -------------------------------------------------------
+# main
+# -------------------------------------------------------
 macs_before, params_before = get_flops_params(net)
 print(f"before prune | MACs: {macs_before / 1e6:.2f}M  Params: {params_before / 1e6:.2f}M")
 
@@ -118,14 +161,21 @@ opt_post = {
     "scheduler": None
 }
 
+
+index_map = {}
+for name, m in net.named_modules():
+    if isinstance(m, nn.Conv2d):
+        index_map[name] = list(range(m.out_channels))
+
 # -------------------------------------------------------
-# 每步在当前模型上剪 ratio_per_step，不依赖内置调度
+# 迭代剪枝
 # -------------------------------------------------------
 for step in range(args.iterative_steps):
     print(f"\n{'=' * 50}")
     print(f"Step {step + 1}/{args.iterative_steps}")
 
-    prune_one_step(net, args.ratio_per_step, example_inputs, args.pruner, train_loader, device)
+    prune_one_step(net, args.ratio_per_step, example_inputs,
+                   args.pruner, train_loader, device, index_map)
 
     sparsity = compute_channel_sparsity(net)
     macs, params = get_flops_params(net)
@@ -135,10 +185,23 @@ for step in range(args.iterative_steps):
     print(f"  Params: {params / 1e6:.2f}M  ({params_before / params:.2f}x)")
 
     result_log = trainer(net, opt_post, train_loader, test_loader, patience=40)
+    print(f"  Test acc={result_log[0]:.2f}%  Train acc={result_log[2]:.2f}%")
 
     formatted_sp = f"{sparsity:.3f}"
     save_path = os.path.join(target_folder, f'step{step + 1:02d}_sp{formatted_sp}.pth')
-    torch.save(net, save_path)
+
+    # index_map 记录当前每个通道对应 dense 的哪个 index
+    # 反推 pruned_dense_map：哪些 dense index 已经被剪掉了
+    pruned_dense_map = {}
+    for name in index_map:
+        all_idx = set(range(original_channels[name]))
+        pruned_dense_map[name] = sorted(all_idx - set(index_map[name]))
+
+    torch.save({
+        'model':           net,
+        'index_map':       index_map,       # 当前存活通道 → dense index
+        'pruned_dense_map': pruned_dense_map,  # 已被剪掉的 dense index
+    }, save_path)
 
 torch.save(dense_model, os.path.join(target_folder, f'dense_{args.m_name}.pth'))
 print(f"\n{'=' * 50}")
