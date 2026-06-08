@@ -76,17 +76,12 @@ def main():
 
     # ── Load regrowth checkpoint
     ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
-    model        = ckpt['model'].to(device)
-    index_map    = ckpt.get('index_map', {})
-    pruned_map   = ckpt.get('pruned_dense_map', {})
+    model      = ckpt['model'].to(device)
+    pruned_map = ckpt.get('pruned_out_dense_map', {})
 
-    sparsity    = compute_channel_sparsity(model, original_channels)
-    total_curr  = sum(m.out_channels for n, m in model.named_modules()
-                      if isinstance(m, nn.Conv2d) and n in original_channels)
-    restored_ch = total_curr - (total_dense_ch - sum(
-        len(v) + len(pruned_map.get(k, [])) for k, v in index_map.items()
-        if k in original_channels
-    ))
+    sparsity   = compute_channel_sparsity(model, original_channels)
+    total_curr = sum(m.out_channels for n, m in model.named_modules()
+                     if isinstance(m, nn.Conv2d) and n in original_channels)
 
     print(f"\nCheckpoint : {args.ckpt}")
     print(f"Dense  total channels : {total_dense_ch}")
