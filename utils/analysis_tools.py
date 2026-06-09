@@ -796,20 +796,24 @@ def compute_block_ssim(features1, features2):
                 feat2_np = feat2.cpu().numpy()
                 H, W = feat1_np.shape
                 win_size = min(7, H, W)
-                if win_size % 2 == 0:  # SSIM requires odd window size
+                if win_size % 2 == 0:
                     win_size -= 1
-                if win_size < 3:  # If features too small for SSIM
-                    # Use MSE-based similarity instead
-                    # score = 1.0 - np.mean((feat1_np - feat2_np) ** 2)
-                    continue
+                if win_size < 3:
+                    # Feature map too small for SSIM — cosine similarity fallback
+                    v1 = feat1_np.flatten()
+                    v2 = feat2_np.flatten()
+                    denom = np.linalg.norm(v1) * np.linalg.norm(v2)
+                    score = float(np.dot(v1, v2) / denom) if denom > 1e-8 else 0.0
                 else:
                     score = ssim(feat1_np, feat2_np,
                                  data_range=1.0,
                                  win_size=win_size)
-            else:  # 1D vector, use correlation instead
-                print('error for layer', lname)
-                continue
-                # score = torch.corrcoef(torch.stack([feat1, feat2]))[0, 1].item()
+            else:
+                # 1D features (Linear layers etc.) — cosine similarity
+                v1 = feat1.cpu().numpy().flatten()
+                v2 = feat2.cpu().numpy().flatten()
+                denom = np.linalg.norm(v1) * np.linalg.norm(v2)
+                score = float(np.dot(v1, v2) / denom) if denom > 1e-8 else 0.0
 
             layer_ssim[lname] = score
 

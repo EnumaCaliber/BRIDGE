@@ -357,7 +357,7 @@ class SSIMLayerSelector:
 
         ssim_dict, selected = {}, []
         for lname in target_layers:
-            score = float(block_ssim.get(lname, 0.5))
+            score = float(block_ssim.get(lname, 0.0))
             ssim_dict[lname] = score
             if score < threshold:
                 selected.append(lname)
@@ -628,8 +628,8 @@ class OneshotStructuredRegrowthPG:
         target_ch = self.target_restore_ch
 
         # ── Allocation decision (channels per layer)
-        ratio_opts = (torch.arange(self.ALLOC_SPACE, device=self.DEVICE, dtype=torch.float)
-                      / (self.ALLOC_SPACE - 1))
+        ratio_opts = torch.arange(1, self.ALLOC_SPACE + 1,
+                                   device=self.DEVICE, dtype=torch.float) / self.ALLOC_SPACE
         remaining  = target_ch
         sel_counts, pnames = [], []
 
@@ -818,7 +818,7 @@ def main():
     parser.add_argument('--start_beta',     type=float, default=0.40)
     parser.add_argument('--end_beta',       type=float, default=0.04)
     parser.add_argument('--decay_fraction', type=float, default=0.4)
-    parser.add_argument('--alloc_space_size',  type=int, default=11)
+    parser.add_argument('--alloc_space_size',  type=int, default=10)
     parser.add_argument('--ssim_threshold',    type=float, default=0.0)
     parser.add_argument('--ssim_num_batches',  type=int,   default=64)
     parser.add_argument('--taylor_batches',    type=int,   default=10)

@@ -75,6 +75,12 @@ def load_baseline_from_folder(model_name, model_dir, device, test_loader):
 
     baseline_dict = dict(sorted(baseline_dict.items()))
     print(f"\nBaseline table built: {len(baseline_dict)} points")
+    if not baseline_dict:
+        raise ValueError(
+            f"No valid baseline checkpoints parsed from {model_dir}.\n"
+            f"Files found: {[f.name for f in pth_files]}\n"
+            f"Expected filenames containing a float, e.g. 'model_0.9903.pth'."
+        )
     print(f"  Sparsity range: {min(baseline_dict.keys()):.4f} ~ {max(baseline_dict.keys()):.4f}")
     print(f"  Accuracy range: {min(baseline_dict.values()):.2f}% ~ {max(baseline_dict.values()):.2f}%")
     print("=" * 60 + "\n")
@@ -313,6 +319,7 @@ class RegrowthPolicyGradient:
         self.init_strategy = config.get('init_strategy', 'zero')
         self.budget_bonus = config.get('budget_bonus', 0.02)  # weight for budget utilization term
 
+        self.finetune_epochs = config.get('finetune_epochs', 40)
         self.early_stop_patience = config.get('early_stop_patience', 40)
         self.min_epochs = config.get('min_epochs', 50)
         self.reward_std_threshold = config.get('reward_std_threshold', 0.002)
@@ -320,6 +327,7 @@ class RegrowthPolicyGradient:
 
         self._best_model_state = None
         self._best_reward_seen = float('-inf')
+        self._best_ckpt_path   = None
 
         self.run = wandb_run
         self.model_name = config.get('model_name')
@@ -444,10 +452,16 @@ class RegrowthPolicyGradient:
         return d
 
     def _save_best_model(self, epoch, reward, accuracy, model, allocation, frac):
+        if self._best_ckpt_path and os.path.exists(self._best_ckpt_path):
+            os.remove(self._best_ckpt_path)
         p = os.path.join(self._save_dir(), f'best_ep{epoch + 1}_rwd{reward * 100:+.2f}pp.pth')
+        self._best_ckpt_path = p
         torch.save({
             'epoch': epoch, 'reward': reward, 'accuracy': accuracy,
             'model_state_dict': model.state_dict(),
+            'agent_state_dict': self.agent.state_dict(),
+            'optimizer_state_dict': self.adam.state_dict(),
+            'reward_baseline': self.reward_baseline,
             'allocation': allocation, 'budget_frac': frac,
             'timestamp': time.time(),
         }, p)
@@ -488,6 +502,7 @@ class RegrowthPolicyGradient:
             loss, ent = self.calculate_loss(ep_budget_logits, ep_alloc_logits, ep_wlp, beta)
             self.adam.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=1.0)
             self.adam.step()
 
             no_imp = epoch - best_reward_ep
@@ -545,8 +560,8 @@ class RegrowthPolicyGradient:
         prev_logits = b_logits.unsqueeze(0)
         print(f"  [Budget] frac={sel_frac:.4f} → {target_rg} weights")
 
-        ratio_opts = (torch.arange(self.ALLOC_SPACE, device=self.DEVICE, dtype=torch.float)
-                      / (self.ALLOC_SPACE - 1))
+        ratio_opts = torch.arange(1, self.ALLOC_SPACE + 1,
+                                   device=self.DEVICE, dtype=torch.float) / self.ALLOC_SPACE
         remaining = target_rg
         sel_counts, pnames = [], []
 
@@ -561,7 +576,15 @@ class RegrowthPolicyGradient:
             logits = self.agent(prev_logits, ctx, step='alloc').squeeze(0)
             eff_max = min(cap, remaining)
             c_opts = torch.round(ratio_opts * eff_max).to(torch.long)
-            feasible = c_opts <= remaining
+
+            seen_vals, dedup = set(), torch.zeros(self.ALLOC_SPACE, dtype=torch.bool,
+                                                   device=self.DEVICE)
+            for j, v in enumerate(c_opts.tolist()):
+                if v not in seen_vals:
+                    seen_vals.add(v)
+                    dedup[j] = True
+
+            feasible = (c_opts <= remaining) & dedup
             if not feasible.any(): feasible[0] = True
 
             masked = torch.where(feasible, logits, torch.full_like(logits, -1e9))
@@ -575,6 +598,15 @@ class RegrowthPolicyGradient:
             all_log_probs.append(dist.log_prob(action))
             alloc_masked_logits.append(masked)
             prev_logits = logits.unsqueeze(0)
+
+        # Guard: if agent allocated nothing, force 1 weight to the highest-saliency layer
+        if sum(sel_counts) == 0:
+            best_i = max(range(len(pnames)),
+                         key=lambda i: self.saliency_dict.get(pnames[i],
+                             torch.tensor(0.0)).mean().item()
+                         if self.layer_capacities[self.layer_priority[i][1]] > 0 else -1)
+            sel_counts[best_i] = 1
+            print(f"  [Guard] all-zero alloc → forced +1 to {pnames[best_i]}")
 
         ep_log_probs = torch.stack(all_log_probs)
         ep_budget_logits = torch.stack(budget_masked_logits)
@@ -593,7 +625,7 @@ class RegrowthPolicyGradient:
                     device=self.DEVICE)
                 regrow_indices[lname] = idxs
 
-        self.mini_finetune(model_copy, epochs=40)
+        self.mini_finetune(model_copy, epochs=self.finetune_epochs)
         accuracy = self.evaluate_model(model_copy, full_eval=True)
         sparsity, _, _ = self.calculate_sparsity(model_copy)
 
@@ -674,11 +706,11 @@ def main():
     parser.add_argument('--m_name', type=str, default='resnet20')
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--method', type=str, default='iterative')
-    parser.add_argument('--baseline_dir', type=str, default="./resnet20/iterative/")
-    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/iterative/iterative_0.9903.pth")
+    parser.add_argument('--baseline_dir', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/")
+    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/pruned_finetuned_mask_0.9903.pth")
     parser.add_argument('--start_sparsity', type=float, default=0.9903)
     parser.add_argument('--target_sparsity', type=float, default=0.97)
-    parser.add_argument('--num_iters', type=int, default=20)
+    parser.add_argument('--num_iters', type=int, default=5)
     parser.add_argument('--num_epochs', type=int, default=300)
     parser.add_argument('--learning_rate', type=float, default=3e-4)
     parser.add_argument('--hidden_size', type=int, default=64)
@@ -688,15 +720,16 @@ def main():
     parser.add_argument('--end_beta', type=float, default=0.04)
     parser.add_argument('--decay_fraction', type=float, default=0.4)
     parser.add_argument('--budget_space_size', type=int, default=5)
-    parser.add_argument('--alloc_space_size', type=int, default=11)
+    parser.add_argument('--alloc_space_size', type=int, default=10)
     parser.add_argument('--min_budget_frac', type=float, default=0.001)
     parser.add_argument('--max_budget_frac', type=float, default=0.005)
-    parser.add_argument('--budget_bonus', type=float, default=0.02,
+    parser.add_argument('--budget_bonus', type=float, default=0.005,
                         help='Weight for budget utilization term in reward')
     parser.add_argument('--ssim_threshold', type=float, default=0)
     parser.add_argument('--ssim_num_batches', type=int, default=128)
     parser.add_argument('--init_strategy', type=str, default='zero',
                         choices=['zero', 'kaiming', 'xavier'])
+    parser.add_argument('--finetune_epochs',    type=int, default=40)
     parser.add_argument('--early_stop_patience', type=int, default=40)
     parser.add_argument('--min_epochs', type=int, default=50)
     parser.add_argument('--reward_std_threshold', type=float, default=0.002)
@@ -824,6 +857,7 @@ def main():
             'decay_fraction': args.decay_fraction,
             'init_strategy': args.init_strategy,
             'budget_bonus': args.budget_bonus,
+            'finetune_epochs': args.finetune_epochs,
             'early_stop_patience': args.early_stop_patience,
             'min_epochs': args.min_epochs,
             'reward_std_threshold': args.reward_std_threshold,
