@@ -707,7 +707,7 @@ def main():
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--method', type=str, default='iterative')
     parser.add_argument('--baseline_dir', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/")
-    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/pruned_finetuned_mask_0.9903.pth")
+    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/iterative_0.9903.pth")
     parser.add_argument('--start_sparsity', type=float, default=0.9903)
     parser.add_argument('--target_sparsity', type=float, default=0.97)
     parser.add_argument('--num_iters', type=int, default=5)

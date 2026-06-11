@@ -365,6 +365,7 @@ class RegrowthPolicyGradient:
             loss, ent = self.calculate_loss(ep_logits, ep_wlp, beta)
             self.adam.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.agent.parameters(), max_norm=1.0)
             self.adam.step()
 
             no_imp = epoch - best_reward_ep
@@ -406,7 +407,6 @@ class RegrowthPolicyGradient:
               f"(sparse baseline: {self.before_accuracy:.2f}%)"
               + (f"  [{stop_reason}]" if stop_reason else ""))
 
-        # Reconstruct best pre-finetune model from saved state
         best_model = self._create_model_copy(self.model_99)
         if self._best_model_state is not None:
             best_model.load_state_dict(self._best_model_state)
@@ -416,8 +416,8 @@ class RegrowthPolicyGradient:
         self.agent.hidden = self.agent.init_hidden()
         prev_logits = torch.zeros(1, self.ACTION_SPACE, device=self.DEVICE)
 
-        ratio_opts = (torch.arange(self.ACTION_SPACE, device=self.DEVICE, dtype=torch.float)
-                      / (self.ACTION_SPACE - 1))
+        ratio_opts = (torch.arange(1, self.ACTION_SPACE + 1, device=self.DEVICE, dtype=torch.float)
+                      / self.ACTION_SPACE)
         remaining = int(self.target_regrow)
         total_budget = remaining
         log_probs, masked_logits_list = [], []
@@ -434,7 +434,12 @@ class RegrowthPolicyGradient:
             logits = self.agent(prev_logits, ctx).squeeze(0)
             eff_max = min(cap, remaining)
             c_opts = torch.round(ratio_opts * eff_max).to(torch.long)
-            feasible = c_opts <= remaining
+            seen_vals, dedup = set(), torch.zeros(self.ACTION_SPACE, dtype=torch.bool, device=self.DEVICE)
+            for j, v in enumerate(c_opts.tolist()):
+                if v not in seen_vals:
+                    seen_vals.add(v)
+                    dedup[j] = True
+            feasible = (c_opts <= remaining) & dedup
             if not feasible.any(): feasible[0] = True
 
             masked = torch.where(feasible, logits, torch.full_like(logits, -1e9))
@@ -465,7 +470,8 @@ class RegrowthPolicyGradient:
                     device=self.DEVICE)
                 regrow_indices[lname] = idxs
 
-        pre_ft_state = copy.deepcopy(model_copy.state_dict())   # regrown, not yet finetuned
+        pre_ft_model = self._create_model_copy(self.model_99)
+        pre_ft_model.load_state_dict(model_copy.state_dict())
         self.mini_finetune(model_copy, epochs=50)
 
         accuracy = self.evaluate_model(model_copy, full_eval=True)
@@ -481,11 +487,11 @@ class RegrowthPolicyGradient:
 
         if reward > self._best_reward_seen:
             self._best_reward_seen = reward
-            self._best_model_state = pre_ft_state                  # save pre-finetune state
-            self._save_best_model(epoch, reward, accuracy, model_copy, pre_ft_state, allocation)
+            self._best_model_state = copy.deepcopy(pre_ft_model.state_dict())
+            self._save_best_model(epoch, reward, accuracy, pre_ft_model)
 
         if self.acc_baseline is not None and accuracy / 100.0 > self.acc_baseline:
-            self._save_baseline_model(epoch, accuracy, model_copy, pre_ft_state, allocation)
+            self._save_baseline_model(epoch, accuracy, pre_ft_model)
 
         print(f"  [Reward] acc={accuracy:.2f}%  Δ={improvement:+.2f}pp  "
               f"usage={usage_ratio:.2f}({actual_regrown}/{self.target_regrow})  "
@@ -510,25 +516,17 @@ class RegrowthPolicyGradient:
         os.makedirs(d, exist_ok=True)
         return d
 
-    def _save_best_model(self, epoch, reward, accuracy, finetuned_model, pre_ft_state, allocation):
+    def _save_best_model(self, epoch, reward, accuracy, pre_ft_model):
         p = os.path.join(self._save_dir(), f'best_ep{epoch + 1}_rwd{reward:+.4f}.pth')
-        torch.save({
-            'epoch': epoch, 'reward': reward, 'accuracy_after_mini_ft': accuracy,
-            'model_state_dict': pre_ft_state,          # pre-finetune weights
-            'allocation': allocation,
-        }, p)
-        print(f"  ✓ Best (pre-finetune saved): reward={reward:+.4f}  mini_ft_acc={accuracy:.2f}% → {p}")
+        torch.save(pre_ft_model, p)
+        print(f"  ✓ Best saved (pre-ft): reward={reward:+.4f}  mini_ft_acc={accuracy:.2f}% → {p}")
         if self.run:
             self.run.log({"best_reward": reward, "best_mini_ft_acc": accuracy, "best_epoch": epoch + 1})
 
-    def _save_baseline_model(self, epoch, accuracy, finetuned_model, pre_ft_state, allocation):
+    def _save_baseline_model(self, epoch, accuracy, pre_ft_model):
         p = os.path.join(self._save_dir(), f'baseline_exceeded_ep{epoch + 1}_acc{accuracy:.2f}.pth')
-        torch.save({
-            'epoch': epoch, 'accuracy_after_mini_ft': accuracy,
-            'model_state_dict': pre_ft_state,          # pre-finetune weights
-            'allocation': allocation, 'acc_baseline': self.acc_baseline,
-        }, p)
-        print(f"  ✓ Baseline exceeded (pre-finetune saved): mini_ft_acc={accuracy:.2f}% → {p}")
+        torch.save(pre_ft_model, p)
+        print(f"  ✓ Baseline exceeded (pre-ft): mini_ft_acc={accuracy:.2f}% → {p}")
         if self.run:
             self.run.log({"baseline_exceeded_acc": accuracy, "baseline_exceeded_epoch": epoch + 1})
 
@@ -544,7 +542,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--m_name', type=str, default='resnet20')
     parser.add_argument('--data_dir', type=str, default='./data')
-    parser.add_argument('--model_sparsity', type=str, default='0.99')
+    parser.add_argument('--model_sparsity', type=str, default='0.98')
     parser.add_argument('--num_epochs', type=int, default=400)
     parser.add_argument('--learning_rate', type=float, default=3e-4)
     parser.add_argument('--hidden_size', type=int, default=64)
@@ -554,21 +552,21 @@ def main():
     parser.add_argument('--end_beta', type=float, default=0.04)
     parser.add_argument('--decay_fraction', type=float, default=0.4)
     parser.add_argument('--action_space_size', type=int, default=11)
-    parser.add_argument('--regrow_step', type=float, default=0.025)
-    parser.add_argument('--budget_bonus', type=float, default=0.02,
+    parser.add_argument('--regrow_step', type=float, default=0.01)
+    parser.add_argument('--budget_bonus', type=float, default=0.005,
                         help='Weight for budget utilization term in reward (encourages using full regrowth budget)')
     parser.add_argument('--init_strategy', type=str, default='zero',
                         choices=['zero', 'kaiming', 'xavier', 'magnitude'])
     parser.add_argument('--ssim_threshold', type=float, default=0.0)
     parser.add_argument('--ssim_num_batches', type=int, default=64)
-    parser.add_argument('--initial_ckpt', type=str, default="resnet20/iterative/iterative_0.9953.pth",
+    parser.add_argument('--initial_ckpt', type=str, default="resnet20/ckpt_after_prune_oneshot/pruned_oneshot_mask_0.98.pth",
                         help='Path to the pruned sparse model checkpoint')
     parser.add_argument('--early_stop_patience', type=int, default=50)
     parser.add_argument('--min_epochs', type=int, default=50)
     parser.add_argument('--reward_std_threshold', type=float, default=0.002)
     parser.add_argument('--reward_window_size', type=int, default=20)
-    parser.add_argument('--acc_baseline', type=float, default=0.9182)
-    parser.add_argument('--save_dir', type=str, default='./rl_saliency_checkpoints')
+    parser.add_argument('--acc_baseline', type=float, default=0.8117)
+    parser.add_argument('--save_dir', type=str, default='./rl_saliency_oneshot')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--no_wandb', action='store_true', default=False)
     # data_loader
@@ -671,15 +669,29 @@ def main():
     before_sp, _, _ = pg.calculate_sparsity(model_99)
     print(f"\nBefore: acc={before_acc:.2f}%  sparsity={before_sp:.2f}%")
 
-    best_alloc, best_reward, _, best_pre_ft_model = pg.solve_environment()
+    t_start = time.time()
+    best_alloc, best_reward, _, _ = pg.solve_environment()
+    elapsed = time.time() - t_start
 
+    summary = (
+        f"model        : {args.m_name}\n"
+        f"sparsity     : {args.model_sparsity}\n"
+        f"sparse_acc   : {before_acc:.2f}%\n"
+        f"best_mini_ft : {before_acc + best_reward * 100:.2f}%  (Δ={best_reward * 100:+.2f}pp)\n"
+        f"search_time  : {elapsed:.1f}s  ({elapsed/3600:.2f}h)\n"
+        f"best_alloc   : {best_alloc}\n"
+    )
     print(f"\n{'=' * 60}")
-    print(f"Sparse baseline : {before_acc:.2f}%")
-    print(f"Best RL (mini_ft): {before_acc + best_reward * 100:.2f}%  "
-          f"(Δ={best_reward * 100:+.2f}pp)")
+    print(summary, end='')
     print(f"{'=' * 60}")
 
+    log_path = os.path.join(pg._save_dir(), 'search_summary.txt')
+    with open(log_path, 'w') as f:
+        f.write(summary)
+    print(f"Summary saved → {log_path}")
+
     if run:
+        run.log({"search_time_s": elapsed})
         run.finish()
 
 
