@@ -772,6 +772,7 @@ def main():
             project="ICCAD_saliency_iterative_v3",
             name=f"{args.m_name}_{args.start_sparsity:.4f}_ssim{args.ssim_threshold}",
             config=vars(args) | {"total_weights": total_weights},
+            settings=wandb.Settings(console='auto'),
         )
     else:
         run = None
@@ -877,7 +878,9 @@ def main():
         )
 
         resume_path = args.resume if (iter_idx == args.resume_iter and args.resume) else None
+        t_iter_start = time.time()
         best_reward, best_frac = pg.solve_environment(resume_from=resume_path)
+        iter_elapsed = time.time() - t_iter_start
 
         best_model = pg.get_best_model() or current_model
         iter_acc = quick_eval(best_model, test_loader, device)
@@ -885,7 +888,8 @@ def main():
         iter_base = baseline_interp.get_baseline_acc(iter_sp / 100.0)
 
         print(f"\n  [Iter {iter_idx + 1}] acc={iter_acc:.2f}%  "
-              f"sp={iter_sp:.2f}%  Δbaseline={iter_acc - iter_base:+.2f}pp  frac={best_frac}")
+              f"sp={iter_sp:.2f}%  Δbaseline={iter_acc - iter_base:+.2f}pp  "
+              f"frac={best_frac}  time={iter_elapsed:.1f}s ({iter_elapsed/3600:.2f}h)")
 
         if run:
             run.log({
@@ -897,6 +901,7 @@ def main():
                 "iter_summary/delta_baseline_pp": iter_acc - iter_base,
                 "iter_summary/best_budget_frac": best_frac,
                 "iter_summary/n_search_layers": len(target_layers),
+                "iter_summary/time_s": iter_elapsed,
             })
 
         save_dir = os.path.join(args.save_dir, f'{args.m_name}/{args.method}/iter_{iter_idx}')
