@@ -816,7 +816,7 @@ def compute_block_ssim(features1, features2):
                 score = float(np.dot(v1, v2) / denom) if denom > 1e-8 else 0.0
 
             layer_ssim[lname] = score
-
+        #add
         if layer_ssim:
             block_ssim[block_name] = layer_ssim
 
