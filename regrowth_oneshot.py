@@ -108,7 +108,7 @@ class SSIMLayerSelector:
 
         ssim_dict, selected = {}, []
         for lname in all_masked:
-            score = float(block_ssim.get(lname, 0.0))
+            score = float(block_ssim.get(lname, 1.0))
             ssim_dict[lname] = score
             if score < threshold:
                 selected.append(lname)

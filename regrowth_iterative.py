@@ -133,7 +133,7 @@ class SSIMLayerSelector:
 
         ssim_dict, selected = {}, []
         for lname in all_masked:
-            score = float(block_ssim.get(lname, 0.0))
+            score = float(block_ssim.get(lname, 1.0))
             ssim_dict[lname] = score
             if score < threshold:
                 selected.append(lname)
@@ -703,12 +703,12 @@ def get_sparsity(model):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name', type=str, default='resnet20')
+    parser.add_argument('--m_name', type=str, default='vgg16')
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--method', type=str, default='iterative')
-    parser.add_argument('--baseline_dir', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/")
-    parser.add_argument('--initial_ckpt', type=str, default="./resnet20/ckpt_after_prune_0.3_epoch_finetune_40/iterative_0.9903.pth")
-    parser.add_argument('--start_sparsity', type=float, default=0.9903)
+    parser.add_argument('--baseline_dir', type=str, default="./vgg16/ckpt_after_prune_0.3_epoch_finetune_40/")
+    parser.add_argument('--initial_ckpt', type=str, default="./vgg16/ckpt_after_prune_0.3_epoch_finetune_40/pruned_finetuned_mask_0.9953.pth")
+    parser.add_argument('--start_sparsity', type=float, default=0.9953)
     parser.add_argument('--target_sparsity', type=float, default=0.97)
     parser.add_argument('--num_iters', type=int, default=5)
     parser.add_argument('--num_epochs', type=int, default=300)
@@ -725,7 +725,7 @@ def main():
     parser.add_argument('--max_budget_frac', type=float, default=0.005)
     parser.add_argument('--budget_bonus', type=float, default=0.005,
                         help='Weight for budget utilization term in reward')
-    parser.add_argument('--ssim_threshold', type=float, default=0)
+    parser.add_argument('--ssim_threshold', type=float, default=0.3)
     parser.add_argument('--ssim_num_batches', type=int, default=128)
     parser.add_argument('--init_strategy', type=str, default='zero',
                         choices=['zero', 'kaiming', 'xavier'])
