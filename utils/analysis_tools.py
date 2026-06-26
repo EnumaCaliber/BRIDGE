@@ -799,7 +799,8 @@ def compute_block_ssim(features1, features2):
                 if win_size % 2 == 0:
                     win_size -= 1
                 if win_size < 3:
-                    # Feature map too small for SSIM — cosine similarity fallback
+                    # score = 0.5
+                    # Cosine similarity alternative:
                     v1 = feat1_np.flatten()
                     v2 = feat2_np.flatten()
                     denom = np.linalg.norm(v1) * np.linalg.norm(v2)
@@ -809,7 +810,8 @@ def compute_block_ssim(features1, features2):
                                  data_range=1.0,
                                  win_size=win_size)
             else:
-                # 1D features (Linear layers etc.) — cosine similarity
+                # score = 0.5
+                # Cosine similarity alternative:
                 v1 = feat1.cpu().numpy().flatten()
                 v2 = feat2.cpu().numpy().flatten()
                 denom = np.linalg.norm(v1) * np.linalg.norm(v2)
