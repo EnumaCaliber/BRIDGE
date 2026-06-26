@@ -442,7 +442,8 @@ class RegrowthPolicyGradient:
         ent_b = -torch.mean(torch.sum(p_b * F.log_softmax(budget_logits, dim=1), dim=1))
         p_a = F.softmax(alloc_logits, dim=1)
         ent_a = -torch.mean(torch.sum(p_a * F.log_softmax(alloc_logits, dim=1), dim=1))
-        ent = (ent_b + ent_a) / 2.0
+        N = self.NUM_STEPS
+        ent = (ent_b + N * ent_a) / (N + 1)
         return loss - beta * ent, ent
 
     def _save_dir(self):
@@ -476,6 +477,7 @@ class RegrowthPolicyGradient:
         best_reward, best_frac, best_reward_ep, start_ep = float('-inf'), None, 0, 0
         reward_window = deque(maxlen=self.reward_window_size)
         stop_reason = ""
+        rwd_std = 1.0
 
         if resume_from and os.path.exists(resume_from):
             ckpt = torch.load(resume_from)
@@ -492,7 +494,7 @@ class RegrowthPolicyGradient:
 
         for epoch in range(start_ep, self.NUM_EPOCHS):
             (ep_wlp, ep_budget_logits, ep_alloc_logits,
-             reward, alloc, sparsity, frac) = self.play_episode(epoch)
+             reward, alloc, sparsity, frac) = self.play_episode(epoch, rwd_std=rwd_std)
 
             reward_window.append(reward)
             if reward > best_reward:
@@ -506,7 +508,7 @@ class RegrowthPolicyGradient:
             self.adam.step()
 
             no_imp = epoch - best_reward_ep
-            rwd_std = float(np.std(list(reward_window))) if len(reward_window) > 1 else float('inf')
+            rwd_std = float(np.std(list(reward_window))) if len(reward_window) > 1 else 1.0
 
             pfx = f"iter_{self.model_sparsity}"
             if self.run:
@@ -543,7 +545,7 @@ class RegrowthPolicyGradient:
               + (f"  [{stop_reason}]" if stop_reason else ""))
         return best_reward, best_frac
 
-    def play_episode(self, epoch):
+    def play_episode(self, epoch, rwd_std=1.0):
         self.agent.hidden = self.agent.init_hidden()
         prev_logits = torch.zeros(1, self.BUDGET_SPACE, device=self.DEVICE)
         all_log_probs, budget_masked_logits, alloc_masked_logits = [], [], []
@@ -652,8 +654,8 @@ class RegrowthPolicyGradient:
         if self.reward_baseline is None:
             self.reward_baseline = reward
         adv = float(np.clip(
-            (reward - self.reward_baseline) / max(self.REWARD_TEMPERATURE, 1e-6),
-            -100.0, 100.0))
+            (reward - self.reward_baseline) / max(rwd_std, 1e-6),
+            -10.0, 10.0))
         self.reward_baseline = (self.BASELINE_DECAY * self.reward_baseline
                                 + (1 - self.BASELINE_DECAY) * reward)
 
@@ -703,11 +705,11 @@ def get_sparsity(model):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name', type=str, default='vgg16')
+    parser.add_argument('--m_name', type=str, default='effnet')
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--method', type=str, default='iterative')
-    parser.add_argument('--baseline_dir', type=str, default="./vgg16/ckpt_after_prune_0.3_epoch_finetune_40/")
-    parser.add_argument('--initial_ckpt', type=str, default="./vgg16/ckpt_after_prune_0.3_epoch_finetune_40/pruned_finetuned_mask_0.9953.pth")
+    parser.add_argument('--baseline_dir', type=str, default="./effnet/ckpt_after_prune_0.3_epoch_finetune_40/")
+    parser.add_argument('--initial_ckpt', type=str, default="./effnet/ckpt_after_prune_0.3_epoch_finetune_40/pruned_finetuned_mask_0.9953.pth")
     parser.add_argument('--start_sparsity', type=float, default=0.9953)
     parser.add_argument('--target_sparsity', type=float, default=0.97)
     parser.add_argument('--num_iters', type=int, default=5)
@@ -725,7 +727,7 @@ def main():
     parser.add_argument('--max_budget_frac', type=float, default=0.005)
     parser.add_argument('--budget_bonus', type=float, default=0.005,
                         help='Weight for budget utilization term in reward')
-    parser.add_argument('--ssim_threshold', type=float, default=0.3)
+    parser.add_argument('--ssim_threshold', type=float, default=0.0)
     parser.add_argument('--ssim_num_batches', type=int, default=128)
     parser.add_argument('--init_strategy', type=str, default='zero',
                         choices=['zero', 'kaiming', 'xavier'])
@@ -769,7 +771,7 @@ def main():
 
     if not args.no_wandb:
         run = wandb.init(
-            project="ICCAD_saliency_iterative_v3",
+            project="ICCAD_saliency_iterative_v4",
             name=f"{args.m_name}_{args.start_sparsity:.4f}_ssim{args.ssim_threshold}",
             config=vars(args) | {"total_weights": total_weights},
         )
