@@ -19,7 +19,7 @@ parser.add_argument('--m_name', type=str, default="resnet20",
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--pruner', type=str, default='l1', choices=['l1', 'lamp', 'taylor'])
 parser.add_argument('--ratio_per_step', type=float, default=0.3)
-parser.add_argument('--iterative_steps', type=int, default=10)
+parser.add_argument('--iterative_steps', type=int, default=15)
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--val_split', type=float, default=0.1)
 parser.add_argument('--num_workers', type=int, default=15)

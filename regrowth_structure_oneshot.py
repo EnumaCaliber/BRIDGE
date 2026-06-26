@@ -803,12 +803,13 @@ def quick_eval(model, test_loader, device, max_batches=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name',         type=str,   default='resnet20')
+    parser.add_argument('--m_name',         type=str,   default='vgg16')
     parser.add_argument('--data_dir',       type=str,   default='./data')
     parser.add_argument('--method',         type=str,   default='structured_oneshot')
     parser.add_argument('--pruned_ckpt',    type=str,
                         default="resnet20/ckpt_structured_iterative/step10_sp0.973.pth")
-    parser.add_argument('--acc_threshold',  type=float, default=50.0)
+    parser.add_argument('--acc_threshold',  type=float, default=-1,
+                        help='Reward baseline acc. -1 = auto (uses starting model acc)')
     parser.add_argument('--sparsity_delta', type=float, default=0.04)
     parser.add_argument('--num_epochs',     type=int,   default=300)
     parser.add_argument('--learning_rate',  type=float, default=3e-4)
@@ -856,13 +857,17 @@ def main():
     # ── Load pruned checkpoint (saved by prune_structure_ratio.py)
     ckpt = torch.load(args.pruned_ckpt, map_location=device, weights_only=False)
     pruned_model     = ckpt['model'].to(device)
-    index_map        = ckpt['out_index_map']
-    pruned_dense_map = ckpt['pruned_out_dense_map']
+    index_map        = ckpt.get('index_map',        ckpt.get('out_index_map'))
+    pruned_dense_map = ckpt.get('pruned_dense_map', ckpt.get('pruned_out_dense_map'))
     pruned_model.eval()
 
     sp0  = compute_channel_sparsity(pruned_model, original_channels)
     acc0 = quick_eval(pruned_model, test_loader, device)
     print(f"\nStarting → Acc={acc0:.2f}%  Sparsity={sp0:.4f}")
+
+    if args.acc_threshold < 0:
+        args.acc_threshold = acc0
+        print(f"acc_threshold auto-set to starting acc: {acc0:.2f}%")
 
     # ── Restorable layers (non-empty entries in pruned_dense_map)
     target_layers    = get_target_layers(pruned_dense_map)

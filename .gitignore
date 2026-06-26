@@ -1,0 +1,35 @@
+cat > .gitignore << 'EOF'
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# 数据集
+data/cifar-10-batches-py/
+data/cifar-10-python.tar.gz
+data/__pycache__/
+
+# 实验结果 / checkpoints
+cka_results/
+greedy_ckpts/
+rl_checkpoints/
+effnet/
+resnet20/
+shufflenetv2/
+vgg16/
+
+# wandb 日志
+wandb/
+
+# 其他常见缓存
+*.log
+.DS_Store
+*.ipynb_checkpoints
+EOF

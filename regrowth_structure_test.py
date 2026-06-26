@@ -15,7 +15,7 @@ import copy
 parser = argparse.ArgumentParser()
 parser.add_argument('--m_name',    type=str, default='resnet20')
 parser.add_argument('--ckpt',      type=str,
-                    default='./resnet20/ckpt_structured_iterative/step08_sp0.964.pth')
+                    default='./structured_rl_ckpts/resnet20/structured_iterative/iter0_sp0.8750/iter1_ep48_rwd+0.0385.pth')
 parser.add_argument('--dense_ckpt', type=str,
                     default='./resnet20/ckpt_structured_iterative/dense_resnet20.pth')
 parser.add_argument('--layer',     type=str, default='conv1',

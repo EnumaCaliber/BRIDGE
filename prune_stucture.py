@@ -12,7 +12,7 @@ from utils.tools import *
 from utils.pruners import *
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Structured Iterative Prune')
-parser.add_argument('--m_name', type=str, default="resnet20")
+parser.add_argument('--m_name', type=str, default="vgg16")
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--pruner', type=str, default='l1',
                     choices=['l1', 'lamp', 'taylor'])
