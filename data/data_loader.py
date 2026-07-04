@@ -9,6 +9,19 @@ import os
 
 
 def dataloader_CIFAR10(data_dir, val_split=0.2,batch_size = 128, num_workers=15):
+
+    """
+    CIFAR10 data loader
+    Args:
+        data_dir: data directory
+        val_split: validation split ratio
+        batch_size: batch size
+        num_workers: number of workers
+    Returns:
+        train_loader: train data loader
+        val_loader: validation data loader
+        test_loader: test data loader
+    """
     
     transform_train = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
@@ -110,6 +123,19 @@ class TinyImageNetDataset(datasets.ImageFolder):
 
 
 def dataloader_tiny_imagenet(data_dir, val_split=0.1, batch_size=128, num_workers=4):
+
+    """
+    Tiny ImageNet data loader
+    Args:
+        data_dir: data directory
+        val_split: validation split ratio
+        batch_size: batch size
+        num_workers: number of workers
+    Returns:
+        train_loader: train data loader
+        val_loader: validation data loader
+        test_loader: test data loader
+    """
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                     std=[0.229, 0.224, 0.225])
     

@@ -15,6 +15,9 @@ __pycache__/
 data/cifar-10-batches-py/
 data/cifar-10-python.tar.gz
 data/__pycache__/
+data/ckpt_structured_iterative_resnet20/
+data/ckpt_structured_iterative_vgg16/
+
 
 # 实验结果 / checkpoints
 cka_results/
