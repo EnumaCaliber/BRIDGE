@@ -540,7 +540,7 @@ class RegrowthPolicyGradient:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name', type=str, default='resnet20')
+    parser.add_argument('--m_name', type=str, default='effnet')
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--model_sparsity', type=str, default='0.98')
     parser.add_argument('--num_epochs', type=int, default=400)

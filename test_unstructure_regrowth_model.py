@@ -8,8 +8,8 @@ from models.model_loader import model_loader
 from data.data_loader import data_loader
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--m_name', type=str, default='effnet')
-parser.add_argument('--model_path', type=str, default='./rl_saliency_checkpoints/effnet/iterative/iter_0/best_grown_model.pth')
+parser.add_argument('--m_name', type=str, default='resnet20')
+parser.add_argument('--model_path', type=str, default='./rl_checkpoints/resnet20/iterative/iter_4/best_grown_model.pth')
 # parser.add_argument('--model_path', type=str, default='./rl_saliency_checkpoints/effnet/oneshot/0.94fullfinetune/final_model_0.94.pth')
 # parser.add_argument('--model_path', type=str, default='./vgg16/ckpt_after_prune_oneshot/pruned_oneshot_mask_0.99.pth')
 parser.add_argument('--seed', type=int, default=42, help='random seed for reproducibility')
@@ -18,7 +18,7 @@ parser.add_argument('--data_dir', type=str, default='./data')
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--val_split',  type=float, default=0.1)
 parser.add_argument('--num_workers',type=int, default=15)
-parser.add_argument('--data_dir',   type=str, default='./data')
+parser.add_argument('--dataset', type=str, default="CIFAR10")
 
 args = parser.parse_args()
 

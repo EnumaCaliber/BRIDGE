@@ -14,10 +14,10 @@ import random
 import numpy as np
 
 parser = argparse.ArgumentParser(description='PyTorch Structured Iterative Prune')
-parser.add_argument('--m_name', type=str, default="resnet20",
+parser.add_argument('--m_name', type=str, default="vgg16",
                     choices=['resnet20', 'vgg16', 'efficientnet', 'shufflenet'])
 parser.add_argument('--seed', type=int, default=42)
-parser.add_argument('--pruner', type=str, default='l1', choices=['l1', 'lamp', 'taylor'])
+parser.add_argument('--pruner', type=str, default='taylor', choices=['l1', 'lamp', 'taylor', 'hessian'])
 parser.add_argument('--ratio_per_step', type=float, default=0.3)
 parser.add_argument('--iterative_steps', type=int, default=15)
 parser.add_argument('--batch_size', type=int, default=128)
@@ -62,7 +62,7 @@ for name, m in net.named_modules():
         original_out_channels[name] = m.out_channels
 
 
-def get_importance(pruner_name, model, train_loader, device):
+def get_importance(pruner_name, model, train_loader, device, n_hessian_batches=4):
     if pruner_name == 'l1':
         return tp.importance.MagnitudeImportance(p=1)
     elif pruner_name == 'lamp':
@@ -75,6 +75,23 @@ def get_importance(pruner_name, model, train_loader, device):
             loss = nn.CrossEntropyLoss()(model(inputs), targets)
             loss.backward()
             break
+        model.eval()
+        return importance
+    elif pruner_name == 'hessian':
+        # Empirical Hessian (OBD): accumulate g² per sample across batches
+        importance = tp.importance.HessianImportance()
+        importance.zero_grad()
+        model.train()
+        crit = nn.CrossEntropyLoss(reduction='none')
+        for i, (inputs, targets) in enumerate(train_loader):
+            if i >= n_hessian_batches:
+                break
+            inputs, targets = inputs.to(device), targets.to(device)
+            losses = crit(model(inputs), targets)
+            for loss in losses:
+                model.zero_grad()
+                loss.backward(retain_graph=True)
+                importance.accumulate_grad(model)
         model.eval()
         return importance
 
@@ -148,7 +165,7 @@ def prune_one_step(model, ratio, example_inputs, pruner_name,
 macs_before, params_before = get_flops_params(net)
 print(f"before prune | MACs: {macs_before / 1e6:.2f}M  Params: {params_before / 1e6:.2f}M")
 
-target_folder = f'./{args.m_name}/ckpt_structured_iterative'
+target_folder = f'./{args.m_name}/ckpt_structured_iterative_{args.pruner}'
 os.makedirs(target_folder, exist_ok=True)
 
 trainer = trainer_loader()

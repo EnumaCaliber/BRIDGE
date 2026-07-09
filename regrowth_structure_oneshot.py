@@ -803,7 +803,7 @@ def quick_eval(model, test_loader, device, max_batches=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name',         type=str,   default='vgg16')
+    parser.add_argument('--m_name',         type=str,   default='effnet')
     parser.add_argument('--data_dir',       type=str,   default='./data')
     parser.add_argument('--method',         type=str,   default='structured_oneshot')
     parser.add_argument('--pruned_ckpt',    type=str,
