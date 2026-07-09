@@ -27,6 +27,7 @@ effnet/
 resnet20/
 shufflenetv2/
 vgg16/
+results/
 
 # wandb 日志
 wandb/
