@@ -46,6 +46,22 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
+def is_safe_regrowth_layer(layer_name, model_name):
+    """
+    For ResNet, avoid structured regrowth on residual shortcut/downsample layers.
+    These projection layers are tied to residual additions and can easily cause
+    channel-index mismatch during regrowth.
+    """
+    model_name = model_name.lower()
+
+    if model_name.startswith("resnet"):
+        unsafe_keywords = ["shortcut", "downsample"]
+        if any(k in layer_name for k in unsafe_keywords):
+            return False
+
+    return True
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Baseline (channel-sparsity → accuracy lookup table)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -348,9 +364,15 @@ class SSIMLayerSelector:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TaylorChannelScorer:
-    def __init__(self, dense_model, device='cuda'):
+    def __init__(self, dense_model, device='cuda', score_mode='taylor'):
         self.model  = dense_model
         self.device = device
+        self.score_mode = score_mode
+        if self.score_mode not in ['taylor', 'fisher']:
+            raise ValueError(
+                f"Unknown score_mode={self.score_mode}. "
+                "Expected 'taylor' or 'fisher'."
+            )
 
     def compute(self, target_layers, data_loader, n_batches=10):
         self.model.train()
@@ -368,7 +390,20 @@ class TaylorChannelScorer:
                 if d_m is None or d_m.weight.grad is None:
                     continue
                 w, g = d_m.weight.data, d_m.weight.grad
-                scores_t = (g * w).abs().sum(dim=tuple(range(1, w.dim())))
+
+                if self.score_mode == 'taylor':
+                    # First-order Taylor channel score:
+                    # score(channel) = sum |gradient * weight|
+                    scores_t = (g * w).abs().sum(dim=tuple(range(1, w.dim())))
+
+                elif self.score_mode == 'fisher':
+                    # Cheap second-order / Fisher-style channel score:
+                    # score(channel) = sum gradient^2 * weight^2
+                    # This approximates Hessian diagonal H_ii by g_i^2.
+                    scores_t = (g.pow(2) * w.pow(2)).sum(
+                        dim=tuple(range(1, w.dim()))
+                    )
+
                 for ch, sc in enumerate(scores_t.tolist()):
                     channel_scores[lname][ch] = channel_scores[lname].get(ch, 0.0) + sc
 
@@ -835,6 +870,13 @@ def main():
     parser.add_argument('--ssim_threshold',     type=float, default=0.0)
     parser.add_argument('--ssim_num_batches',   type=int,   default=64)
     parser.add_argument('--taylor_batches',     type=int,   default=10)
+    parser.add_argument(
+    '--regrowth_score',
+    type=str,
+    default='fisher',
+    choices=['taylor', 'fisher'],
+    help="Channel scoring method for structured regrowth: "
+         "'taylor' = |g*w|, 'fisher' = g^2*w^2.")
     parser.add_argument('--finetune_epochs',    type=int,   default=40)
     parser.add_argument('--early_stop_patience',   type=int,   default=40)
     parser.add_argument('--min_epochs',            type=int,   default=50)
@@ -926,6 +968,25 @@ def main():
         if run:
             for lname, sc in ssim_scores.items():
                 run.log({f'ssim/{lname}': sc, 'ssim_iter': iter_idx + 1})
+        
+        # Filter out unsafe ResNet shortcut/downsample layers before computing capacity.
+        unsafe_selected = [
+            n for n in selected_layers
+            if not is_safe_regrowth_layer(n, args.m_name)
+        ]
+
+        if unsafe_selected:
+            print(f"  [Filter] skipping unsafe ResNet layers: {unsafe_selected}")
+
+        selected_layers = [
+            n for n in selected_layers
+            if is_safe_regrowth_layer(n, args.m_name)
+        ]
+
+        if len(selected_layers) == 0:
+            raise RuntimeError(
+                "No safe regrowth layers left after filtering unsafe ResNet layers."
+            )
 
         layer_capacities = get_layer_capacities(pruned_dense_map, selected_layers)
         total_capacity   = sum(layer_capacities)
@@ -936,11 +997,16 @@ def main():
 
         print(f"  selected_layers={len(selected_layers)}  total_capacity={total_capacity} ch")
 
-        # ── Taylor scores (from dense model)
-        print("Computing Taylor scores...")
-        channel_scores = TaylorChannelScorer(dense_model=dense_model, device=device).compute(
+        # ── Channel scores from dense model
+        print(f"Computing channel scores with {args.regrowth_score}...")
+        channel_scores = TaylorChannelScorer(
+            dense_model=dense_model,
+            device=device,
+            score_mode=args.regrowth_score,
+        ).compute(
             target_layers=selected_layers,
-            data_loader=train_loader, n_batches=args.taylor_batches,
+            data_loader=train_loader,
+            n_batches=args.taylor_batches,
         )
 
         sp_label = f"iter{iter_idx}_sp{cur_sp:.4f}"
