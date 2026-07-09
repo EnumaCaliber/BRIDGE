@@ -96,7 +96,6 @@ def get_flops_params(model):
     macs, params = tp.utils.count_ops_and_params(model, example_inputs)
     return macs, params
 
-
 def prune_one_step(model, ratio, example_inputs, pruner_name,
                    train_loader, device, out_index_map):
 
