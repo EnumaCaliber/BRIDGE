@@ -615,6 +615,7 @@ class OneshotStructuredRegrowthPG:
         self._best_reward_seen = float('-inf')
         self._best_index_map   = None
         self._best_pruned_map  = None  # preserve pruned_dense_map of the best episode
+        self._best_checkpoint_path = None
 
         self.run            = wandb_run
         self.model_name     = config.get('model_name')
@@ -900,6 +901,7 @@ class OneshotStructuredRegrowthPG:
             'index_map'       : index_map,
             'pruned_dense_map': pruned_dense_map,
         }, p)
+        self._best_checkpoint_path = p
         print(f"  ✓ Best (pre-finetune): reward={reward:+.4f}  "
               f"mini_ft_acc={accuracy:.2f}% → {p}")
         if self.run:
@@ -951,13 +953,13 @@ def quick_eval(model, test_loader, device, max_batches=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name',         type=str,   default='resnet20')
+    parser.add_argument('--m_name',         type=str,   default='vgg16')
     parser.add_argument('--data_dir',       type=str,   default='./data')
     parser.add_argument('--method',         type=str,   default='structured_oneshot')
     parser.add_argument('--pruned_ckpt',    type=str,
-                        default="resnet20/prune_structure_oneshot/step01_sp0.875.pth")
+                        default="vgg16/prune_structure_oneshot/step01_sp0.875.pth")
     parser.add_argument('--baseline_dir',   type=str,
-                        default="resnet20/prune_structure_oneshot",
+                        default="vgg16/prune_structure_oneshot",
                         help='Folder of pruned checkpoints to build sparsity→acc baseline '
                              '(dense model extracted automatically). Empty string disables.')
     parser.add_argument('--acc_threshold',  type=float, default=-1,
@@ -1128,9 +1130,13 @@ def main():
 
     pg.solve_environment()
 
-    if pg._best_model_state is not None:
-        best_model = copy.deepcopy(pruned_model)
-        best_model.load_state_dict(pg._best_model_state)
+    if pg._best_checkpoint_path is not None:
+        best_ckpt = torch.load(
+            pg._best_checkpoint_path,
+            map_location=device,
+            weights_only=False,
+        )
+        best_model = best_ckpt['model'].to(device)
     else:
         best_model = pruned_model
 
