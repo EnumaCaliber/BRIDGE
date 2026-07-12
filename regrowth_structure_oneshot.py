@@ -15,6 +15,7 @@ import os
 import time
 import wandb
 import random
+from pathlib import Path
 from torch.distributions import Categorical
 from collections import deque
 import torch_pruning as tp
@@ -65,6 +66,88 @@ def get_layer_capacities(pruned_dense_map, target_layers):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Baseline (channel-sparsity → accuracy lookup table)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_baseline_from_folder(baseline_dir, device, test_loader):
+    """Scan a folder of structured pruning checkpoints and build a sparsity→acc table.
+
+    Checkpoints must contain 'model' (full model object).
+    The model with the most total Conv2d channels is treated as the dense reference.
+    Returns (baseline_dict, dense_model, original_channels).
+    """
+    pth_files = sorted(Path(baseline_dir).glob('*.pth'))
+    if not pth_files:
+        raise ValueError(f"No .pth files found in {baseline_dir}")
+
+    # ── Pass 1: load all models, find the densest one as reference
+    loaded = []
+    for pth_file in pth_files:
+        try:
+            ckpt  = torch.load(pth_file, map_location=device, weights_only=False)
+            model = ckpt['model'].to(device) if isinstance(ckpt, dict) else ckpt.to(device)
+            model.eval()
+            total_ch = sum(m.out_channels for m in model.modules()
+                           if isinstance(m, nn.Conv2d))
+            loaded.append((pth_file, model, total_ch))
+        except Exception as e:
+            print(f"  Error loading {pth_file.name}: {e}")
+
+    if not loaded:
+        raise ValueError(f"No valid checkpoints in {baseline_dir}")
+
+    dense_model = max(loaded, key=lambda t: t[2])[1]
+    original_channels = {n: m.out_channels for n, m in dense_model.named_modules()
+                         if isinstance(m, nn.Conv2d)}
+
+    # ── Pass 2: compute sparsity and accuracy for each checkpoint
+    print('=' * 60)
+    baseline_dict = {}
+    for pth_file, model, _ in loaded:
+        try:
+            sp = compute_channel_sparsity(model, original_channels)
+            correct, total = 0, 0
+            with torch.no_grad():
+                for x, y in test_loader:
+                    x, y = x.to(device), y.to(device)
+                    _, pred = model(x).max(1)
+                    total   += y.size(0)
+                    correct += pred.eq(y).sum().item()
+            acc = 100.0 * correct / total
+            baseline_dict[sp] = acc
+            print(f"  {pth_file.name}: sp={sp:.4f}  acc={acc:.2f}%")
+        except Exception as e:
+            print(f"  Error evaluating {pth_file.name}: {e}")
+
+    baseline_dict = dict(sorted(baseline_dict.items()))
+    if not baseline_dict:
+        raise ValueError(f"No valid checkpoints in {baseline_dir}")
+    print(f"\nBaseline: {len(baseline_dict)} pts  "
+          f"sp=[{min(baseline_dict):.4f}…{max(baseline_dict):.4f}]  "
+          f"acc=[{min(baseline_dict.values()):.2f}%…{max(baseline_dict.values()):.2f}%]")
+    print('=' * 60 + '\n')
+    return baseline_dict, dense_model, original_channels
+
+
+class BaselineInterpolator:
+    def __init__(self, table: dict):
+        self.points = {float(k): float(v) for k, v in table.items()}
+        pts = sorted(self.points.items())
+        print(f"  [Baseline] {len(pts)} pts: sp {pts[0][0]:.4f}→{pts[-1][0]:.4f}")
+
+    def get_baseline_acc(self, sparsity: float) -> float:
+        pts = sorted(self.points.items())
+        if sparsity <= pts[0][0]:  return pts[0][1]
+        if sparsity >= pts[-1][0]: return pts[-1][1]
+        for i in range(len(pts) - 1):
+            s1, a1 = pts[i];  s2, a2 = pts[i + 1]
+            if s1 <= sparsity <= s2:
+                t = (sparsity - s1) / (s2 - s1 + 1e-12)
+                return a1 + t * (a2 - a1)
+        return pts[-1][1]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DependencyGraph-based Channel Restoration
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -87,6 +170,20 @@ def _get_dense_weight(layer_name, dense_idx, dim, dense_named):
     w     = m.weight.data
     idx_t = torch.tensor(dense_idx, device=w.device)
     return w.index_select(dim, idx_t)
+
+
+def _find_survived_in_ch(lname, in_ch_sparse, index_map, exclude=None):
+    """Return the dense in_channel indices currently present in the sparse layer.
+
+    Searches index_map for an entry whose length matches in_ch_sparse.
+    Falls back to range(in_ch_sparse) if none found (in_ch not pruned).
+    """
+    for name, survived in index_map.items():
+        if name == exclude:
+            continue
+        if len(survived) == in_ch_sparse:
+            return survived
+    return list(range(in_ch_sparse))
 
 
 def regrow_channels_dg(model, dense_model, example_inputs,
@@ -195,11 +292,15 @@ def regrow_channels_dg(model, dense_model, example_inputs,
                 dense_w = _get_dense_weight(name, dense_indices, dim=0, dense_named=dense_named)
 
                 if dense_w is not None:
-                    # Align in_channels: sparse in_ch may be < dense in_ch
-                    min_in = min(old_w.shape[1], dense_w.shape[1])
-                    new_w  = torch.zeros(num_grow, old_w.shape[1],
-                                         *old_w.shape[2:], device=device)
-                    new_w[:, :min_in] = dense_w[:, :min_in]
+                    if dense_w.shape[1] != old_w.shape[1]:
+                        # Feeder layer is also pruned; select its survived in_channel columns
+                        # via index_map instead of naively truncating to the first N.
+                        survived_in = _find_survived_in_ch(name, old_w.shape[1], index_map,
+                                                           exclude=name)
+                        sel   = torch.tensor(survived_in, device=device)
+                        new_w = dense_w[:, sel, :, :]
+                    else:
+                        new_w = dense_w
                 else:
                     new_w = torch.zeros(num_grow, old_w.shape[1],
                                         *old_w.shape[2:], device=device)
@@ -225,11 +326,18 @@ def regrow_channels_dg(model, dense_model, example_inputs,
                 dense_w = _get_dense_weight(name, dense_indices, dim=1, dense_named=dense_named)
 
                 if dense_w is not None:
-                    # Align out_channels: sparse out_ch may be < dense out_ch
-                    min_out = min(old_w.shape[0], dense_w.shape[0])
-                    new_w   = torch.zeros(old_w.shape[0], num_grow,
-                                          *old_w.shape[2:], device=device)
-                    new_w[:min_out] = dense_w[:min_out]
+                    if dense_w.shape[0] != old_w.shape[0]:
+                        # This layer's own out_channels are also pruned; select the
+                        # survived rows recorded in index_map instead of truncating.
+                        survived_out = index_map.get(name)
+                        if survived_out is not None and len(survived_out) == old_w.shape[0]:
+                            sel   = torch.tensor(survived_out, device=device)
+                            new_w = dense_w[sel, :, :, :]
+                        else:
+                            new_w = torch.zeros(old_w.shape[0], num_grow,
+                                                *old_w.shape[2:], device=device)
+                    else:
+                        new_w = dense_w
                 else:
                     new_w = torch.zeros(old_w.shape[0], num_grow,
                                         *old_w.shape[2:], device=device)
@@ -273,11 +381,16 @@ def regrow_channels_dg(model, dense_model, example_inputs,
                 dense_linear = dense_named.get(name)
 
                 if dense_linear is not None:
-                    new_w   = dense_linear.weight.data[:, dense_indices]
-                    min_out = min(old_w.shape[0], new_w.shape[0])
-                    pad_w   = torch.zeros(old_w.shape[0], num_grow, device=device)
-                    pad_w[:min_out] = new_w[:min_out]
-                    new_w = pad_w
+                    new_w = dense_linear.weight.data[:, dense_indices]
+                    if new_w.shape[0] != old_w.shape[0]:
+                        # This layer's own out_features are also pruned; select the
+                        # survived rows recorded in index_map instead of truncating.
+                        survived_out = index_map.get(name)
+                        if survived_out is not None and len(survived_out) == old_w.shape[0]:
+                            sel   = torch.tensor(survived_out, device=device)
+                            new_w = new_w[sel]
+                        else:
+                            new_w = torch.zeros(old_w.shape[0], num_grow, device=device)
                 else:
                     new_w = torch.zeros(old_w.shape[0], num_grow, device=device)
 
@@ -296,11 +409,14 @@ def regrow_channels_dg(model, dense_model, example_inputs,
                 dense_linear = dense_named.get(name)
 
                 if dense_linear is not None:
-                    new_w   = dense_linear.weight.data[dense_indices]
-                    min_in  = min(old_w.shape[1], new_w.shape[1])
-                    pad_w   = torch.zeros(num_grow, old_w.shape[1], device=device)
-                    pad_w[:, :min_in] = new_w[:, :min_in]
-                    new_w = pad_w
+                    new_w = dense_linear.weight.data[dense_indices]
+                    if new_w.shape[1] != old_w.shape[1]:
+                        # Feeder layer is also pruned; select its survived in_channel
+                        # columns via index_map instead of naively truncating.
+                        survived_in = _find_survived_in_ch(name, old_w.shape[1], index_map,
+                                                           exclude=name)
+                        sel   = torch.tensor(survived_in, device=device)
+                        new_w = new_w[:, sel]
                 else:
                     new_w = torch.zeros(num_grow, old_w.shape[1], device=device)
 
@@ -457,7 +573,7 @@ class OneshotStructuredRegrowthPG:
                  channel_scores, index_map, pruned_dense_map,
                  original_channels, example_inputs,
                  target_layers, train_loader, test_loader,
-                 device, wandb_run=None):
+                 device, baseline_interp=None, wandb_run=None):
 
         self.NUM_EPOCHS         = config['num_epochs']
         self.ALPHA              = config['learning_rate']
@@ -470,7 +586,8 @@ class OneshotStructuredRegrowthPG:
         self.CONTEXT_DIM        = config.get('context_dim', 3)
         self.BASELINE_DECAY     = config.get('baseline_decay', 0.9)
 
-        self.acc_threshold    = config['acc_threshold']
+        self.acc_threshold    = config['acc_threshold']  # fallback when no baseline_interp
+        self.baseline_interp  = baseline_interp
         self.target_restore_ch = config['target_restore_ch']
 
         self.model_sparse      = model_sparse
@@ -729,13 +846,20 @@ class OneshotStructuredRegrowthPG:
         pre_ft_model = copy.deepcopy(new_model)
         self.mini_finetune(new_model, epochs=self.finetune_epochs)
 
+        # mini-finetune accuracy is only the search signal (reward / baseline check);
+        # the model actually saved is the pre-finetune one — you run the real
+        # (300-epoch) finetune yourself afterwards on the saved checkpoints.
         accuracy = self.evaluate_model(new_model, full_eval=True)
         sparsity = compute_channel_sparsity(new_model, self.original_channels)
 
-        reward = (accuracy - self.acc_threshold) / 100.0
+        if self.baseline_interp is not None:
+            baseline_acc = self.baseline_interp.get_baseline_acc(sparsity)
+        else:
+            baseline_acc = self.acc_threshold
+        reward = (accuracy - baseline_acc) / 100.0
 
-        print(f"  [Reward] acc={accuracy:.2f}%  threshold={self.acc_threshold:.2f}%  "
-              f"Δ={accuracy - self.acc_threshold:+.2f}pp  "
+        print(f"  [Reward] acc={accuracy:.2f}%  baseline={baseline_acc:.2f}%  "
+              f"Δ={accuracy - baseline_acc:+.2f}pp  "
               f"reward={reward:+.4f}  [{time.time() - t0:.1f}s]")
 
         if reward > self._best_reward_seen:
@@ -745,6 +869,10 @@ class OneshotStructuredRegrowthPG:
             self._best_pruned_map  = copy.deepcopy(ep_pruned_map)
             self._save_best(epoch, reward, accuracy, pre_ft_model,
                             ep_index_map, ep_pruned_map)
+
+        if accuracy > baseline_acc:
+            self._save_baseline_exceeded(epoch, accuracy, baseline_acc, pre_ft_model,
+                                         ep_index_map, ep_pruned_map)
 
         if self.reward_baseline is None:
             self.reward_baseline = reward
@@ -778,6 +906,26 @@ class OneshotStructuredRegrowthPG:
             self.run.log({"best_reward": reward, "best_mini_ft_acc": accuracy,
                           "best_epoch": epoch + 1})
 
+    def _save_baseline_exceeded(self, epoch, accuracy, baseline_acc, model,
+                                index_map, pruned_dense_map):
+        p = os.path.join(self._save_dir(),
+                         f'baseline_exceeded_ep{epoch + 1}_acc{accuracy:.2f}.pth')
+        model_to_save = copy.deepcopy(model)
+        for m in model_to_save.modules():
+            m._forward_hooks.clear()
+            m._backward_hooks.clear()
+            m._forward_pre_hooks.clear()
+        torch.save({
+            'model'           : model_to_save,
+            'index_map'       : index_map,
+            'pruned_dense_map': pruned_dense_map,
+        }, p)
+        print(f"  ✓ Baseline exceeded (pre-finetune): acc={accuracy:.2f}%  "
+              f"baseline={baseline_acc:.2f}% → {p}")
+        if self.run:
+            self.run.log({"baseline_exceeded_acc": accuracy,
+                          "baseline_exceeded_epoch": epoch + 1})
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Utilities
@@ -803,14 +951,19 @@ def quick_eval(model, test_loader, device, max_batches=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m_name',         type=str,   default='vgg16')
+    parser.add_argument('--m_name',         type=str,   default='resnet20')
     parser.add_argument('--data_dir',       type=str,   default='./data')
     parser.add_argument('--method',         type=str,   default='structured_oneshot')
     parser.add_argument('--pruned_ckpt',    type=str,
-                        default="resnet20/ckpt_structured_iterative/step10_sp0.973.pth")
+                        default="resnet20/prune_structure_oneshot/step01_sp0.875.pth")
+    parser.add_argument('--baseline_dir',   type=str,
+                        default="resnet20/prune_structure_oneshot",
+                        help='Folder of pruned checkpoints to build sparsity→acc baseline '
+                             '(dense model extracted automatically). Empty string disables.')
     parser.add_argument('--acc_threshold',  type=float, default=-1,
-                        help='Reward baseline acc. -1 = auto (uses starting model acc)')
-    parser.add_argument('--sparsity_delta', type=float, default=0.04)
+                        help='Fallback reward baseline acc when --baseline_dir is empty. '
+                             '-1 = auto (uses starting model acc)')
+    parser.add_argument('--sparsity_delta', type=float, default=0.01) # magnitude of sparsity increase 0.01 0.02 0.03 0.04 four runs
     parser.add_argument('--num_epochs',     type=int,   default=300)
     parser.add_argument('--learning_rate',  type=float, default=3e-4)
     parser.add_argument('--hidden_size',    type=int,   default=64)
@@ -848,11 +1001,20 @@ def main():
     )
     example_inputs = next(iter(train_loader))[0][:1].to(device)
 
-    # ── Load dense model
-    dense_model = model_loader(args.m_name, device)
-    load_model_name(dense_model, f'./{args.m_name}/checkpoint', args.m_name)
+    # ── Dense model + baseline
+    if args.baseline_dir:
+        print("\nBuilding baseline from folder (dense model extracted automatically)...")
+        baseline_dict, dense_model, original_channels = load_baseline_from_folder(
+            args.baseline_dir, device, test_loader)
+        baseline_interp = BaselineInterpolator(baseline_dict)
+    else:
+        dense_model = model_loader(args.m_name, device)
+        load_model_name(dense_model, f'./{args.m_name}/checkpoint', args.m_name)
+        original_channels = get_original_channels(dense_model)
+        baseline_interp = None
+        print("  No baseline_dir provided; reward = acc - acc_threshold\n")
+
     dense_model.eval()
-    original_channels = get_original_channels(dense_model)
 
     # ── Load pruned checkpoint (saved by prune_structure_ratio.py)
     ckpt = torch.load(args.pruned_ckpt, map_location=device, weights_only=False)
@@ -864,10 +1026,12 @@ def main():
     sp0  = compute_channel_sparsity(pruned_model, original_channels)
     acc0 = quick_eval(pruned_model, test_loader, device)
     print(f"\nStarting → Acc={acc0:.2f}%  Sparsity={sp0:.4f}")
+    if baseline_interp is not None:
+        print(f"  Baseline at sp={sp0:.4f}: {baseline_interp.get_baseline_acc(sp0):.2f}%\n")
 
     if args.acc_threshold < 0:
         args.acc_threshold = acc0
-        print(f"acc_threshold auto-set to starting acc: {acc0:.2f}%")
+        print(f"acc_threshold (fallback) auto-set to starting acc: {acc0:.2f}%")
 
     # ── Restorable layers (non-empty entries in pruned_dense_map)
     target_layers    = get_target_layers(pruned_dense_map)
@@ -959,7 +1123,7 @@ def main():
         target_layers=selected_layers,
         train_loader=train_loader,
         test_loader=test_loader,
-        device=device, wandb_run=run,
+        device=device, baseline_interp=baseline_interp, wandb_run=run,
     )
 
     pg.solve_environment()
