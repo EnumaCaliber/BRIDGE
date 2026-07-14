@@ -161,13 +161,13 @@ trainer = trainer_loader()
 if args.dataset == "CIFAR10":
     opt_post = {
         "optimizer": partial(optim.AdamW, lr=0.0003),
-        "steps": 400 * 313,
+        "steps": 40 * 313,
         "scheduler": None
     }
 elif args.dataset == "tiny_imagenet":
     opt_post = {
         "optimizer": partial(optim.AdamW, lr=0.0003),
-        "steps": 400 * 702,
+        "steps": 40 * 702,
         "scheduler": None
     }
 
